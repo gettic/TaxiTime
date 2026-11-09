@@ -35,6 +35,8 @@ local COLOR_RECORD = { 1.0, 0.5, 0.1 }
 local COLOR_DONE = { 0.2, 0.8, 0.3 }
 
 local frame, status, iconFrame, icon, leftText, rightText
+local totalsText      -- "Spent ... | Flown ..." line under the bar
+local lastMoneyText, lastCopper -- cache for the coin string
 local cloud, sparkleFrame, sparkle
 local pulseAnim, fadeAnim
 local flapIndex       -- frame of the flyer sheet shown now
@@ -42,6 +44,7 @@ local iconX = 0       -- flyer centre x from the bar's left edge
 local landTime        -- GetTime() of a real landing (sparkle), or nil
 local mode            -- nil | "flight" | "record" | "test" | "done"
 local total = 1       -- recorded time of the route (flight/test mode)
+local estimate = ""   -- "~" while the time comes from the starter list, else ""
 local startTime = 0   -- GetTime() at take-off
 local lastSec         -- last whole second written to the time text
 local doneToken = 0   -- cancels an old "Recorded" fade timer
@@ -142,12 +145,29 @@ local function StopAnims()
 	flapIndex = nil
 end
 
+-- this character's totals under the bar (TT.charTotals, filled by Core)
+local function UpdateTotals()
+	if not totalsText then return end
+	local t = TT.charTotals
+	if not (t and TT.db.bar.showTotals) then
+		totalsText:Hide()
+		return
+	end
+	if t.copper ~= lastCopper then
+		lastCopper = t.copper
+		lastMoneyText = TT.FormatMoney(t.copper)
+	end
+	totalsText:SetText("|cffb0b0b0Spent|r " .. lastMoneyText .. "  |cff777777|||r  |cffb0b0b0Flown|r " .. TT.FormatLong(t.seconds))
+	totalsText:Show()
+end
+
 local function Begin(newMode, fromName, toName, elapsed)
 	mode = newMode
 	doneToken = doneToken + 1
 	StopAnims()
 	startTime = GetTime() - (elapsed or 0)
 	lastSec = nil
+	estimate = "" -- StartFlight sets "~" again for a starter time
 	local route = TT.ShortName(fromName) .. " > " .. TT.ShortName(toName)
 	if newMode == "record" then
 		leftText:SetText("Recording: " .. route)
@@ -155,6 +175,7 @@ local function Begin(newMode, fromName, toName, elapsed)
 		leftText:SetText(route)
 	end
 	rightText:SetText("")
+	UpdateTotals()
 	frame:Show()
 end
 
@@ -179,10 +200,11 @@ local function OnUpdate()
 		if sec ~= lastSec then
 			lastSec = sec
 			if e <= total then
-				rightText:SetText(TT.FormatTime(total - e) .. " / " .. TT.FormatTime(total))
+				rightText:SetText(estimate .. TT.FormatTime(total - e) .. " / " .. estimate .. TT.FormatTime(total))
 			else
-				rightText:SetText("+" .. TT.FormatTime(e - total))
+				rightText:SetText(estimate .. "+" .. TT.FormatTime(e - total))
 			end
+			UpdateTotals()
 		end
 	elseif mode == "record" then
 		local now = GetTime()
@@ -191,6 +213,7 @@ local function OnUpdate()
 		if sec ~= lastSec then
 			lastSec = sec
 			rightText:SetText(TT.FormatTime(sec))
+			UpdateTotals()
 		end
 	end
 end
@@ -277,6 +300,14 @@ function Bar:Create()
 	leftText:SetJustifyH("LEFT")
 	leftText:SetWordWrap(false)
 
+	-- totals line under the bar; it moves, fades and hides with the frame
+	totalsText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	totalsText:SetPoint("TOP", frame, "BOTTOM", 0, -2)
+	totalsText:SetJustifyH("CENTER")
+	totalsText:SetWordWrap(false)
+	-- keep the line on screen: the bar stays 14 px above the bottom edge
+	frame:SetClampRectInsets(0, 0, 0, -14)
+
 	iconFrame = CreateFrame("Frame", nil, frame)
 	iconFrame:SetSize(ICON_SIZE, ICON_SIZE)
 	iconFrame:SetFrameLevel(status:GetFrameLevel() + 5)
@@ -344,10 +375,12 @@ end
 -- Public functions (called from Core.lua)
 ------------------------------------------------------------------------
 
--- Known route: fill over the recorded time
-function Bar:StartFlight(fromName, toName, recorded, elapsed)
+-- Known route: fill over the recorded time.
+-- isEstimate = true for a starter-list time: the time text gets a "~" in front.
+function Bar:StartFlight(fromName, toName, recorded, elapsed, isEstimate)
 	total = (recorded and recorded > 0) and recorded or 1
 	Begin("flight", fromName, toName, elapsed)
+	estimate = isEstimate and "~" or ""
 	SetColor(COLOR_FLIGHT)
 	status:SetMinMaxValues(0, total)
 	status:SetValue(0)
@@ -376,6 +409,7 @@ function Bar:Finish(recordedDur, landed)
 	pulseAnim:Stop()
 	status:SetAlpha(1)
 	mode = "done"
+	UpdateTotals() -- includes this flight's last seconds and fare
 	ShowCloud(false)
 	if landed and sparkleFrame then
 		-- flyer stays a moment, then the sparkle takes its place
@@ -434,6 +468,12 @@ function Bar:SetLocked(locked)
 	else
 		Bar:ShowTest()
 	end
+end
+
+-- /tt totals on|off (the setting itself is TaxiTimeDB.bar.showTotals)
+function Bar:SetShowTotals(show)
+	if not totalsText then return end
+	if show then UpdateTotals() else totalsText:Hide() end
 end
 
 function Bar:ResetPosition()
