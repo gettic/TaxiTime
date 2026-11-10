@@ -4,7 +4,7 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.1.0. Please report any problems you find.
+Version 0.1.1. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
@@ -33,6 +33,10 @@ Version 0.1.0. Please report any problems you find.
 | Landing | When the time is saved, a small sparkle where the flyer lands. Then the bar fades out. |
 
 The saved times are shared by all your characters on the account.
+
+### Flights from a talk option
+
+Some flights don't start from the flight map. For example, the druid flights between Moonglade and Thunder Bluff or Rut'theran Village start from a talk option. These are timed too. The first time, the bar shows `Moonglade > ?` and the destination is named when you land. Later flights count down like any other. A flight started some other way without the flight map is saved by the zone you left and the zone you landed in.
 
 ### Times correct themselves
 

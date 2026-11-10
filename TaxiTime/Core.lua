@@ -20,6 +20,8 @@ local TIME_GAP = 2             -- a step longer than this (loading screen) is no
 local STARTER_NOTE_DIFF = 5    -- first flight on a starter time: mention the starter time if off by more (s)
 local EXPORT_VERSION = 1       -- /tt export format (the merge script in plans\starter-times checks it)
 local EXPORT_MIN, EXPORT_MAX = 5, 3600 -- seconds; routes outside are left out (same as MIN_SEC/MAX_SEC in merge.lua)
+local GOSSIP_WINDOW = 15       -- a flight without a map click this soon after talking to an NPC is that NPC's flight
+local WATCH_TRIES = 8          -- control lost while idle: look for a taxi this many times, TICK apart
 
 local DEFAULTS_BAR = {
 	point = "TOP", relPoint = "TOP", x = 0, y = -160,
@@ -39,6 +41,7 @@ local currentNode        -- the node the flight master stands at
 local taxiMapID
 local ticker
 local loading = false    -- true between PLAYER_LEAVING_WORLD and PLAYER_ENTERING_WORLD (+1 s)
+local lastGossip         -- { npcID, at }: last NPC talked to (for flights started from a talk option)
 TT.lastKey = nil         -- key of the last route flown (for /tt forget)
 
 ------------------------------------------------------------------------
@@ -94,6 +97,50 @@ local function RouteKey(from, to)
 		return from.nodeID .. ">" .. to.nodeID
 	end
 	return "name:" .. (from.name or "?") .. ">" .. (to.name or "?")
+end
+
+-- Flights started without a map click (e.g. druid flights from a talk option)
+-- use language-independent keys: "gossip:<npcID>:<startMapID>" or "zone:<startMapID>:<landMapID>".
+
+local function PlayerMapID()
+	if C_Map and C_Map.GetBestMapForUnit then
+		local ok, id = pcall(C_Map.GetBestMapForUnit, "player")
+		if ok and type(id) == "number" then return id end
+	end
+	return nil
+end
+
+-- zone name for the bar and chat (display only, never part of a key)
+local function ZoneName()
+	local z = GetZoneText and GetZoneText()
+	if type(z) == "string" and z ~= "" then return z end
+	z = GetSubZoneText and GetSubZoneText()
+	if type(z) == "string" and z ~= "" then return z end
+	return nil
+end
+
+-- "Creature-0-4372-1-1234-11798-0000ABCDEF" -> 11798
+local function NpcIDFromGUID(guid)
+	if type(guid) ~= "string" then return nil end
+	local parts = {}
+	for p in guid:gmatch("[^%-]+") do parts[#parts + 1] = p end
+	if (parts[1] == "Creature" or parts[1] == "Vehicle") and parts[6] then
+		return tonumber(parts[6])
+	end
+	return nil
+end
+
+-- the only recorded "zone:" route from this start map, or nil (none or several)
+local function OnlyZoneRoute(startMap)
+	local prefix = "zone:" .. startMap .. ":"
+	local found
+	for key, route in pairs(TT.db.routes) do
+		if type(key) == "string" and key:sub(1, #prefix) == prefix and type(route) == "table" and route.time then
+			if found then return nil end
+			found = key
+		end
+	end
+	return found
 end
 
 -- totals table { copper, seconds, flights, since }: missing parts start at 0
@@ -313,6 +360,7 @@ local function SaveActive(f)
 		key = f.key, fromName = f.fromName, toName = f.toName,
 		mapID = f.mapID, destX = f.destX, destY = f.destY,
 		startWall = f.startWall,
+		openDest = f.openDest or nil, zoneStart = f.zoneStart,
 		noRecord = f.noRecord or nil,
 		listCost = f.listCost,
 		costDone = f.costDone or nil,
@@ -327,6 +375,8 @@ local function BeginFlight(info, elapsed)
 	flight = {
 		key = info.key, fromName = info.fromName, toName = info.toName,
 		mapID = info.mapID, destX = info.destX, destY = info.destY,
+		openDest = info.openDest and true or nil, -- no map click: destination name (and zone key) set at landing
+		zoneStart = info.zoneStart,                -- "zone:" flight: start map ID
 		startTime = GetTime() - elapsed,
 		startWall = info.startWall or time(),
 		known = refTime and true or false,
@@ -387,6 +437,26 @@ local function EndFlight()
 	CostFallback(f)
 	RoundTotals()
 
+	local noLandMap
+	if f.openDest then
+		-- flight without a map click: the landing zone names the destination
+		local landName = ZoneName()
+		if landName then f.toName = landName end
+		if f.zoneStart then
+			local landMap = PlayerMapID()
+			if landMap then
+				local key = "zone:" .. f.zoneStart .. ":" .. landMap
+				if key ~= f.key then
+					-- landed somewhere else than the one known route: a different route
+					f.key, f.refTime, f.estimate = key, nil, false
+				end
+			else
+				noLandMap = true
+			end
+		end
+		TT.lastKey = f.key
+	end
+
 	local dur = GetTime() - f.startTime
 	local route = TT.db.routes[f.key]
 	local recTime = route and route.time
@@ -400,6 +470,8 @@ local function EndFlight()
 		reason = "landed during a loading screen"
 	elseif f.aborted then
 		reason = "early landing"
+	elseif noLandMap then
+		reason = "landing place unknown"
 	elseif dur < MIN_FLIGHT then
 		reason = "too short"
 	elseif not LandedNearDest(f) and (not oldTime or dur < oldTime * SHORT_RATIO) then
@@ -486,6 +558,7 @@ end
 -- Hook: the player clicked a destination on the flight map
 local function OnTakeTaxiNode(slot)
 	if state == "flying" then return end
+	lastGossip = nil -- a map flight, not a talk-option one
 	local to = nodeCache[slot]
 	if not to then
 		to = { name = TaxiNodeName and TaxiNodeName(slot) }
@@ -510,6 +583,40 @@ end
 
 local function OnEarlyLanding()
 	if flight then flight.aborted = true end
+end
+
+-- On a taxi without a map click (talk option, e.g. the druid flights in
+-- Moonglade / Thunder Bluff / Rut'theran): time it with a key made from the
+-- NPC talked to, else from the start map (finished at landing in EndFlight).
+local function StartUntrackedFlight()
+	local startMap = PlayerMapID()
+	local info = { fromName = ZoneName() or "?", toName = "?", openDest = true }
+	local g = lastGossip
+	lastGossip = nil
+	if g and g.npcID and GetTime() - g.at <= GOSSIP_WINDOW then
+		info.key = "gossip:" .. g.npcID .. ":" .. (startMap or "?")
+	elseif startMap then
+		info.zoneStart = startMap
+		-- one known route from here: count down to it; else record ("?" until landing)
+		info.key = OnlyZoneRoute(startMap) or ("zone:" .. startMap .. ":?")
+	else
+		return -- no way to tell routes apart
+	end
+	local route = TT.db.routes[info.key]
+	if route and route.to then info.toName = route.to end
+	BeginFlight(info)
+end
+
+-- control lost while idle: a few looks whether we are on a taxi (stun/fear: never)
+local function WatchTakeoff(tries)
+	C_Timer.After(TICK, function()
+		if state ~= "idle" or loading then return end
+		if UnitOnTaxi("player") then
+			StartUntrackedFlight()
+		elseif tries > 1 then
+			WatchTakeoff(tries - 1)
+		end
+	end)
 end
 
 -- After login/reload/disconnect: carry on showing a flight that was running,
@@ -561,6 +668,7 @@ function handlers.ADDON_LOADED(name)
 	events:RegisterEvent("PLAYER_ENTERING_WORLD")
 	events:RegisterEvent("PLAYER_LEAVING_WORLD")
 	events:RegisterEvent("PLAYER_MONEY")
+	events:RegisterEvent("GOSSIP_SHOW")
 end
 
 function handlers.PLAYER_MONEY()
@@ -568,12 +676,22 @@ function handlers.PLAYER_MONEY()
 end
 
 function handlers.TAXIMAP_OPENED()
+	lastGossip = nil -- flight master map: its flights come through TakeTaxiNode
 	ScanTaxiMap()
 	TT.Tooltip:OnTaxiMapOpened()
 end
 
 function handlers.PLAYER_CONTROL_LOST()
-	if state == "pending" then C_Timer.After(0.1, CheckTaxi) end
+	if state == "pending" then
+		C_Timer.After(0.1, CheckTaxi)
+	elseif state == "idle" and not loading then
+		WatchTakeoff(WATCH_TRIES) -- flight without a map click?
+	end
+end
+
+function handlers.GOSSIP_SHOW()
+	local guid = UnitGUID and UnitGUID("npc")
+	lastGossip = { npcID = NpcIDFromGUID(guid), at = GetTime() }
 end
 
 function handlers.PLAYER_CONTROL_GAINED()
