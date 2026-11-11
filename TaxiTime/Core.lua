@@ -57,7 +57,7 @@ local DEFAULTS_BAR = {
 	point = "TOP", relPoint = "TOP", x = 0, y = -160,
 	width = 260, locked = true,
 	showTotals = true,         -- gold/time totals line under the bar
-	flyerStyle = "model",      -- "model" (the game's 3D creature) or "cartoon" (our sheets)
+	-- (bar.flyerStyle from v0.2.0-beta.1 is no longer used; old saves keep it, unread)
 }
 
 ------------------------------------------------------------------------
@@ -835,7 +835,6 @@ local function Help()
 	Print("  /tt reset - put the bar back in its default place")
 	Print("  /tt test - show or hide a test bar (/tt test bat: with a bat)")
 	Print("  /tt flyer gryphon | wind rider | bat | hippogryph | auto - the creature for flights from here")
-	Print("  /tt flyer style model | cartoon - 3D creature or cartoon picture; /tt model bat - check a 3D model")
 	Print("  /tt forget - forget the time of the current or last route")
 	Print("  /tt tooltip - show or hide flight times on the flight map")
 	Print("  /tt totals - gold spent and time flown; /tt totals on | off - line under the bar")
@@ -936,15 +935,9 @@ end
 -- (the running flight's, else the last flight's or flight map's). Saved per
 -- start point in TaxiTimeDB.flyers; "auto" goes back to the automatic choice.
 local function FlyerCommand(rest)
-	local style = rest:match("^style ?(.*)$")
-	if style then
-		if style == "model" or style == "cartoon" then
-			TT.Bar:SetStyle(style)
-			Print(style == "model" and "flying creature: the game's 3D model (cartoon while it loads or if it can't be shown)."
-				or "flying creature: cartoon pictures.")
-		else
-			Print("use /tt flyer style model or /tt flyer style cartoon (now: " .. tostring(TT.db.bar.flyerStyle) .. ").")
-		end
+	if rest:match("^style") then
+		-- the 3D style of v0.2.0-beta.1 is gone
+		Print("the bar always shows the pixel-art creature now; /tt flyer bat (etc.) picks which one.")
 		return
 	end
 	local spot, name = flyerSpot, flyerSpotName
@@ -1007,24 +1000,6 @@ SlashCmdList.TAXITIME = function(msg)
 		end
 	elseif word == "flyer" then
 		FlyerCommand(rest)
-	elseif word == "model" then
-		-- check: /tt model <kind> or /tt model <kind> <displayID>
-		local k, id = rest:match("^(.-) ?(%d*)$")
-		local kind = FLYER_ALIASES[k] or k
-		if not FLYER_KINDS[kind] then
-			Print("use /tt model gryphon | wind rider | bat | hippogryph (optional: a display ID to try).")
-		else
-			local displayID = tonumber(id)
-			Print(string.format("loading the %s model%s...", FLYER_KINDS[kind], displayID and (" (display ID " .. displayID .. ")") or ""))
-			TT.Bar:ModelCheck(kind, displayID, function(ok, how)
-				if ok then
-					Print(string.format("%s model shown (%s). /tt test hides the test bar.", FLYER_KINDS[kind],
-						how == "creature" and "via the creature ID" or "via the display ID"))
-				else
-					Print(string.format("%s model not shown (%s): the cartoon is used.", FLYER_KINDS[kind], tostring(how)))
-				end
-			end)
-		end
 	elseif cmd == "forget" then
 		local key = TT.lastKey
 		local route = key and TT.db.routes[key]

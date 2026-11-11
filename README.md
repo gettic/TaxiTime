@@ -4,7 +4,7 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.0-beta.1. Please report any problems you find.
+Version 0.2.0-beta.2. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
@@ -57,9 +57,9 @@ The addon guesses your creature from the flight master you used and where you ar
 
 If the guess is wrong, open the flight master's map (or fly from there once) and type `/tt flyer bat` (or `gryphon`, `wind rider`, `hippogryph`). This is remembered for flights from that flight master. `/tt flyer auto` goes back to the automatic choice.
 
-The creature is the game's own 3D model, flying above the bar. While it loads, or if the game can't show it, a cartoon picture drawn for Taxi Time is used instead. `/tt flyer style cartoon` always uses the cartoon pictures, and `/tt flyer style model` goes back to 3D. This is remembered too.
+The creature is a small pixel-art picture drawn for Taxi Time, flapping along the top of the bar.
 
-To check a creature, `/tt test bat` shows a test bar with it, and `/tt model bat` shows one and says in chat whether the 3D model loaded.
+To check a creature, `/tt test bat` shows a test bar with it.
 
 ## Flight-map tooltips
 
@@ -97,8 +97,7 @@ Type `/tt` or `/taxitime`, followed by:
 | `lock` | Locks the bar again. A locked bar lets clicks go through it. |
 | `reset` | Puts the bar back in its default place (top middle of the screen). |
 | `test` | Shows or hides a test bar. `test bat` (or `gryphon`, `wind rider`, `hippogryph`) shows it with that creature. |
-| `flyer` | Sets the creature for flights from this flight master: `flyer bat` (or `gryphon`, `wind rider`, `hippogryph`, `auto`). `flyer style model` / `flyer style cartoon` picks 3D or cartoon. |
-| `model` | `model bat` (or another creature) shows a test bar and says if the 3D model loaded. |
+| `flyer` | Sets the creature for flights from this flight master: `flyer bat` (or `gryphon`, `wind rider`, `hippogryph`, `auto`). |
 | `forget` | Forgets the saved time of the route you are flying or flew last. |
 | `tooltip` | Turns the times on the flight map on or off. |
 | `totals` | Prints gold spent and time flown. `totals on` / `totals off` shows or hides the line under the bar. |
@@ -124,7 +123,7 @@ The bar starts locked. `/tt` on its own lists the commands.
 
 ## Art
 
-The addon's own pictures (the bar frame, fill, cartoon flyers, cloud and sparkle) were drawn for Taxi Time. The 3D flying creatures are the game's own models, which the addon asks the game to show by ID. No Blizzard or other outside art files are included. The script that draws it is in `art-source/` (see [its README](art-source/README.md)).
+The addon's own pictures (the bar frame, fill, pixel-art flyers, cloud and sparkle) were drawn for Taxi Time. No Blizzard or other outside art files are included. The scripts that draw it are in `art-source/` (see [its README](art-source/README.md)).
 
 ## For developers
 
@@ -133,16 +132,17 @@ The addon's own pictures (the bar frame, fill, cartoon flyers, cloud and sparkle
 | `TaxiTime/TaxiTime_Forever.toc` | Addon info: interface 16001, version, saved variables. |
 | `TaxiTime/StarterTimes.lua` | The starter times list (empty in this version). |
 | `TaxiTime/Core.lua` | Finds take-off and landing, saves route times, counts totals, the `/tt` command and export window. |
-| `TaxiTime/Bar.lua` | The bar, the flying creature (3D model and cartoon), cloud, sparkle and the totals line. |
+| `TaxiTime/Bar.lua` | The bar, the flying creature (pixel art), cloud, sparkle and the totals line. |
 | `TaxiTime/Tooltip.lua` | The time line in the flight-map tooltips. |
 | `TaxiTime/media/` | The art (`.tga` files). |
-| `art-source/make_art.py` | Draws the art files. |
+| `art-source/make_art.py` | Draws the bar frame, fill, cloud and sparkle. |
+| `art-source/make_flyers_v3b.py` | Draws the four flyer sheets. |
 
 Saved data:
 
 | Saved variable | Holds |
 |---|---|
-| `TaxiTimeDB` (account) | Route times, the bar's position, the tooltip, totals-line and creature-style settings, your creature choices per flight master, and all characters' totals. |
+| `TaxiTimeDB` (account) | Route times, the bar's position, the tooltip and totals-line settings, your creature choices per flight master, and all characters' totals. |
 | `TaxiTimeCharDB` (per character) | This character's totals, and the flight in progress, so it can be shown again after a login. |
 
 The settings for recording (minimum flight time, the 80% rule, landing distance) are constants at the top of `Core.lua`. Setting `USE_CUSTOM_ART = false` at the top of `Bar.lua` switches to a plain look with the game's own icons, for example if the picture files don't load.
