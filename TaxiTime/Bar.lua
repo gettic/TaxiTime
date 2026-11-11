@@ -12,9 +12,9 @@ local USE_CUSTOM_ART = true
 local MEDIA = "Interface\\AddOns\\" .. ADDON .. "\\media\\"
 
 local HEIGHT = 26
-local SHEET_SIZE = 128           -- pixel-art flap sheet on the bar, 1:1 with the 128x128 frames (crisp)
-local SHEET_Y = -26              -- sheet bottom vs the bar's top edge (empty space under the creature)
-local SHEET_MARGIN = 16          -- empty columns each side of a frame (96x96 art centred in 128):
+local SHEET_SIZE = 64            -- pixel-art flap sheet on the bar: the 128x128 frames drawn at half size (2:1)
+local SHEET_Y = -13              -- sheet bottom vs the bar's top edge (empty space under the creature)
+local SHEET_MARGIN = 8           -- empty columns each side of a frame (96x96 art centred in 128, at half size):
                                  -- the drawn creature, not the frame, reaches the bar ends
 local ICON_SIZE = 24             -- round Blizzard icon on the bar
 
