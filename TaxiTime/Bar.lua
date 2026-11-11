@@ -12,18 +12,46 @@ local USE_CUSTOM_ART = true
 local MEDIA = "Interface\\AddOns\\" .. ADDON .. "\\media\\"
 
 local HEIGHT = 26
-local ICON_SIZE = USE_CUSTOM_ART and 28 or 24
-local ICON_ALLIANCE, ICON_HORDE
-if USE_CUSTOM_ART then
-	-- 256x64 sheets, 4 frames of 64x64 facing right (up, mid, down, mid)
-	ICON_ALLIANCE = MEDIA .. "flyer_alliance"
-	ICON_HORDE = MEDIA .. "flyer_horde"       -- wind rider
-else
-	ICON_ALLIANCE = "Interface\\Icons\\Ability_Mount_Gryphon_01"
-	ICON_HORDE = "Interface\\Icons\\Ability_Mount_Wyvern_01"
-end
+local SHEET_SIZE = 48            -- custom flap sheet on the bar (creature ~75% of the frame width)
+local SHEET_Y = -8               -- sheet bottom vs the bar's top edge (empty space under the creature)
+local ICON_SIZE = 24             -- round Blizzard icon on the bar
+
+-- All flyer art in one place. Per creature (kind from Core's TT.FlyerFor):
+--   sheet = our own 512x128 sheet, 4 frames of 128x128 facing right (up, going down, down, going up)
+--   ready = the sheet file is in media\ (the game can't tell us if a file is
+--           missing: SetTexture always returns true, so this flag decides)
+--   icon  = Blizzard's own icon, referenced by name (never shipped), used when
+--           custom art is off or the sheet isn't ready
+-- Icon names checked on warcraft.wiki.gg (File: pages / mount pages).
+local FLYER_ART = {
+	gryphon    = { sheet = MEDIA .. "flyer_gryphon", ready = true, icon = "Interface\\Icons\\Ability_Mount_Gryphon_01" },
+	wyvern     = { sheet = MEDIA .. "flyer_windrider", ready = true, icon = "Interface\\Icons\\Ability_Mount_Wyvern_01" },
+	bat        = { sheet = MEDIA .. "flyer_bat", ready = true, icon = "Interface\\Icons\\Ability_Hunter_Pet_Bat" },
+	hippogryph = { sheet = MEDIA .. "flyer_hippogryph", ready = true, icon = "Interface\\Icons\\Ability_Mount_WarHippogryph" },
+}
+local FACTION_FLYER = { Alliance = "gryphon", Horde = "wyvern" } -- unknown creature: as before
+
+-- The game's own 3D creature (flyer style "model", the default; "cartoon" = the
+-- sheets above). Shown in a PlayerModel frame with no background; the game's
+-- model files are only referenced by ID, never shipped. If a model doesn't load
+-- in MODEL_WAIT s it tries SetCreature(npc), then the cartoon sheet stays.
+-- ALL IDs ARE UNCONFIRMED (from memory; no allowed source lists them):
+-- check with /tt model <kind> in game and fix here.
+--   display = CreatureDisplayID (SetDisplayInfo), npc = creature ID (SetCreature)
+--   facing  = radians (SetFacing, counter-clockwise; side-on, nose to the right)
+--   zoom / cam = SetPortraitZoom / SetCamDistanceScale, z = SetPosition height
+--   size = model frame (square, bigger than the creature so wings aren't cut)
+--   vis  = visible creature width (keeps it inside the bar ends), y = bottom offset
+local FLYER_MODEL = {
+	gryphon    = { display = 1149, npc = 541,  facing = -math.pi / 2, zoom = 0, cam = 1.0, z = 0, size = 96, vis = 72, y = -20 },
+	wyvern     = { display = 295,  npc = 2224, facing = -math.pi / 2, zoom = 0, cam = 1.0, z = 0, size = 96, vis = 72, y = -20 },
+	bat        = { display = 1566, npc = 3574, facing = -math.pi / 2, zoom = 0, cam = 1.0, z = 0, size = 96, vis = 72, y = -20 },
+	hippogryph = { display = 1936, npc = 3837, facing = -math.pi / 2, zoom = 0, cam = 1.0, z = 0, size = 96, vis = 72, y = -20 },
+}
+local MODEL_ANIMS = { 135, 5, 4, 0 } -- Fly (unconfirmed ID), Run, Walk, Stand: first the model has
+local MODEL_WAIT = 1.5               -- seconds to wait for a model to load before the next try
 local FLAP_FPS = 10              -- wing-flap frames per second
-local HALF_TEXEL = 0.5 / 256     -- keeps a frame from bleeding into its neighbour
+local HALF_TEXEL = 0.5 / 512     -- keeps a frame from bleeding into its neighbour (512 px sheets)
 local CAP_W = HEIGHT / 2         -- frame caps: 32x64 of the texture -> 13x26
 local CLOUD_SPEED = 12           -- px per second, right to left
 local CLOUD_ALPHA = 0.85
@@ -39,6 +67,19 @@ local totalsText      -- "Spent ... | Flown ..." line under the bar
 local lastMoneyText, lastCopper -- cache for the coin string
 local cloud, sparkleFrame, sparkle
 local pulseAnim, fadeAnim
+local iconMask        -- round mask for Blizzard icons (added only while one is shown)
+local maskOn = false
+local iconIsSheet = false -- true: custom flap sheet, false: Blizzard icon
+local iconSize = ICON_SIZE
+local flyerKind       -- kind shown now (after fallbacks)
+local flyerVisible = false -- the flyer should be on screen (model or icon)
+local model           -- PlayerModel frame, made on first use
+local modelState      -- nil | "waiting" | "shown"
+local modelTry        -- "display" | "creature" while waiting
+local modelTune       -- FLYER_MODEL entry in use
+local modelToken = 0  -- cancels old load timers
+local modelFailed = {} -- kind -> true: no model this session (cartoon instead)
+local modelReport     -- /tt model check: function(ok, how) called once with the result
 local flapIndex       -- frame of the flyer sheet shown now
 local iconX = 0       -- flyer centre x from the bar's left edge
 local landTime        -- GetTime() of a real landing (sparkle), or nil
@@ -76,7 +117,7 @@ local function SetColor(c)
 end
 
 local function SetFlap(now)
-	if not USE_CUSTOM_ART then return end
+	if not iconIsSheet then return end
 	local i = math.floor(now * FLAP_FPS) % 4
 	if i ~= flapIndex then
 		flapIndex = i
@@ -84,14 +125,153 @@ local function SetFlap(now)
 	end
 end
 
+------------------------------------------------------------------------
+-- Flyer: the 3D model when it is loaded, else the sheet/icon
+------------------------------------------------------------------------
+
+-- show what should be seen: the model once loaded, else the icon frame
+local function RefreshFlyer()
+	local useModel = flyerVisible and modelState == "shown"
+	if flyerVisible and not useModel then iconFrame:Show() else iconFrame:Hide() end
+	if model then
+		if useModel then
+			model:SetAlpha(1)
+			model:Show()
+		elseif flyerVisible and modelState == "waiting" then
+			model:SetAlpha(0) -- loading out of sight while the cartoon shows
+			model:Show()
+		else
+			model:Hide()
+		end
+	end
+end
+
+local function Report(ok, how)
+	if modelReport then
+		local f = modelReport
+		modelReport = nil
+		f(ok, how)
+	end
+end
+
+-- end of a flight / style change: hide the model and let the game free it
+local function HideModel()
+	modelToken = modelToken + 1
+	if modelState == "waiting" then Report(false, "stopped") end
+	modelState, modelTry, modelTune = nil, nil, nil
+	if model then
+		model:Hide()
+		pcall(model.ClearModel, model)
+	end
+	RefreshFlyer()
+end
+
+local function ModelHasFile()
+	local ok, id = pcall(model.GetModelFileID, model)
+	return ok and type(id) == "number" and id > 0
+end
+
+-- loaded: side-on, zoom and the flying animation from FLYER_MODEL
+local function ModelReady()
+	if modelState ~= "waiting" then return end
+	local t = modelTune
+	modelState = "shown"
+	modelToken = modelToken + 1
+	pcall(model.SetPortraitZoom, model, t.zoom or 0)
+	pcall(model.SetCamDistanceScale, model, t.cam or 1)
+	pcall(model.SetPosition, model, 0, 0, t.z or 0)
+	pcall(model.SetFacing, model, t.facing or 0)
+	for _, anim in ipairs(MODEL_ANIMS) do
+		local ok, has = pcall(model.HasAnimation, model, anim)
+		if ok and has then
+			pcall(model.SetAnimation, model, anim)
+			break
+		end
+	end
+	model:SetSize(t.size, t.size)
+	RefreshFlyer()
+	Report(true, modelTry)
+end
+
+local WaitForModel -- forward
+
+-- no model: next try (SetCreature), else the cartoon for this kind this session
+local function ModelTimeout(kind)
+	if modelState ~= "waiting" then return end
+	if ModelHasFile() then ModelReady() return end
+	if modelTry == "display" and modelTune.npc then
+		modelTry = "creature"
+		pcall(model.SetCreature, model, modelTune.npc)
+		WaitForModel(kind)
+	else
+		if not modelTune.check then modelFailed[kind] = true end
+		Report(false, modelTry)
+		HideModel()
+	end
+end
+
+WaitForModel = function(kind)
+	modelToken = modelToken + 1
+	local token = modelToken
+	C_Timer.After(MODEL_WAIT, function()
+		if token == modelToken then ModelTimeout(kind) end
+	end)
+end
+
+-- start loading the model of a kind (the cartoon shows until it is loaded)
+local function StartModel(kind, tune)
+	if not model then
+		-- made on first use only (cartoon style never makes it)
+		local ok, m = pcall(CreateFrame, "PlayerModel", nil, frame)
+		if not ok or not m then
+			modelFailed[kind] = true
+			Report(false, "no model frame")
+			return
+		end
+		model = m
+		model:SetFrameLevel(iconFrame:GetFrameLevel())
+		model:SetScript("OnModelLoaded", function() ModelReady() end)
+		model:Hide()
+	end
+	HideModel()
+	modelTune, modelState, modelTry = tune, "waiting", "display"
+	model:SetSize(tune.size, tune.size)
+	pcall(model.SetDisplayInfo, model, tune.display)
+	RefreshFlyer()
+	WaitForModel(kind)
+end
+
+local function FlyerStyle()
+	local s = TT.db and TT.db.bar and TT.db.bar.flyerStyle
+	return (s == "cartoon") and "cartoon" or "model"
+end
+
+-- show/hide the flyer; showing starts the model (style "model") if it isn't there yet
+local function ShowFlyer(show)
+	flyerVisible = show and true or false
+	if flyerVisible and modelState == nil and flyerKind and FlyerStyle() == "model"
+		and FLYER_MODEL[flyerKind] and not modelFailed[flyerKind] then
+		StartModel(flyerKind, FLYER_MODEL[flyerKind])
+	end
+	RefreshFlyer()
+end
+
 local function SetIconX(pct, now)
 	local w = status:GetWidth()
-	iconX = ICON_SIZE / 2 + (w - ICON_SIZE) * pct
 	local bob = 2 * math.sin(now * 4)
+	if modelState == "shown" then
+		-- only moves the frame: the model animates itself
+		local vis = modelTune.vis
+		iconX = vis / 2 + (w - vis) * pct
+		model:ClearAllPoints()
+		model:SetPoint("BOTTOM", status, "TOPLEFT", iconX, modelTune.y + bob)
+		return
+	end
+	iconX = iconSize / 2 + (w - iconSize) * pct
 	iconFrame:ClearAllPoints()
-	if USE_CUSTOM_ART then
-		-- the sheet has empty space under the creature: sit 6 px into the bar
-		iconFrame:SetPoint("BOTTOM", status, "TOPLEFT", iconX, -6 + bob)
+	if iconIsSheet then
+		-- the sheet has empty space under the creature: sit a little into the bar
+		iconFrame:SetPoint("BOTTOM", status, "TOPLEFT", iconX, SHEET_Y + bob)
 	else
 		iconFrame:SetPoint("BOTTOM", status, "TOPLEFT", iconX, 3 + bob)
 	end
@@ -123,13 +303,15 @@ end
 local function UpdateSparkle(now)
 	local t = now - landTime
 	if t >= SPARKLE_TIME then
-		iconFrame:Hide()
+		ShowFlyer(false)
+		HideModel()
 		StopSparkle()
 		return
 	end
-	if t >= FLYER_KEEP and iconFrame:IsShown() then
-		iconFrame:Hide()
-	elseif iconFrame:IsShown() then
+	if t >= FLYER_KEEP and flyerVisible then
+		ShowFlyer(false)
+		HideModel() -- end of the flight: hide and free the model
+	elseif flyerVisible then
 		SetFlap(now)
 	end
 	local i = math.min(3, math.floor(t / SPARKLE_STEP))
@@ -313,10 +495,13 @@ function Bar:Create()
 	iconFrame:SetFrameLevel(status:GetFrameLevel() + 5)
 	icon = iconFrame:CreateTexture(nil, "ARTWORK")
 	icon:SetAllPoints()
-	local faction = UnitFactionGroup("player")
-	icon:SetTexture(faction == "Horde" and ICON_HORDE or ICON_ALLIANCE)
+	if iconFrame.CreateMaskTexture then
+		iconMask = iconFrame:CreateMaskTexture()
+		iconMask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+		iconMask:SetAllPoints(icon)
+	end
+	Bar:SetFlyer(nil) -- faction creature until a flight says otherwise
 	if USE_CUSTOM_ART then
-		SetFlap(0)
 
 		-- cloud: above the bar, behind the flyer (frame textures sit under child frames)
 		cloud = frame:CreateTexture(nil, "BACKGROUND")
@@ -333,14 +518,6 @@ function Bar:Create()
 		sparkle:SetTexture(MEDIA .. "sparkle")
 		sparkle:SetTexCoord(0, 0.25, 0, 1)
 		sparkleFrame:Hide()
-	else
-		icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-		if iconFrame.CreateMaskTexture then
-			local mask = iconFrame:CreateMaskTexture()
-			mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-			mask:SetAllPoints(icon)
-			icon:AddMaskTexture(mask)
-		end
 	end
 
 	-- pulsing "Recording" fill
@@ -362,6 +539,8 @@ function Bar:Create()
 		frame:Hide()
 		frame:SetAlpha(1)
 		StopSparkle()
+		flyerVisible = false
+		HideModel()
 		mode = nil
 	end)
 
@@ -375,6 +554,74 @@ end
 -- Public functions (called from Core.lua)
 ------------------------------------------------------------------------
 
+-- The flying creature's art: kind = "gryphon" | "wyvern" | "bat" | "hippogryph"
+-- or nil (unknown: the faction's creature, as before). Style "model": the 3D
+-- creature once it loads (started when the flyer is shown); until then, and
+-- for style "cartoon", our sheet if custom art is on and the sheet is ready,
+-- else Blizzard's icon for that creature.
+function Bar:SetFlyer(kind)
+	if not icon then return end
+	local art = kind and FLYER_ART[kind]
+	if not art then
+		kind = FACTION_FLYER[UnitFactionGroup("player")] or "gryphon"
+		art = FLYER_ART[kind]
+	end
+	if kind ~= flyerKind or modelState == nil then HideModel() end
+	flyerKind = kind
+	local useSheet = USE_CUSTOM_ART and art.ready and true or false
+	iconIsSheet = useSheet
+	iconSize = useSheet and SHEET_SIZE or ICON_SIZE
+	iconFrame:SetSize(iconSize, iconSize)
+	flapIndex = nil
+	if useSheet then
+		icon:SetTexture(art.sheet)
+		if iconMask and maskOn then icon:RemoveMaskTexture(iconMask); maskOn = false end
+		SetFlap(GetTime())
+	else
+		icon:SetTexture(art.icon)
+		icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		if iconMask and not maskOn then icon:AddMaskTexture(iconMask); maskOn = true end
+	end
+	if flyerVisible then ShowFlyer(true) end -- changed mid-flight: model for the new kind
+end
+
+-- kind shown now, whether it is our sheet, and the model state (tests / debugging)
+function Bar:GetFlyer()
+	return flyerKind, iconIsSheet, modelState
+end
+
+-- /tt flyer style model | cartoon (saved in TaxiTimeDB.bar.flyerStyle)
+function Bar:SetStyle(style)
+	TT.db.bar.flyerStyle = (style == "cartoon") and "cartoon" or "model"
+	HideModel()
+	if TT.db.bar.flyerStyle == "model" then wipe(modelFailed) end -- give models a new try
+	if flyerVisible then ShowFlyer(true) end
+end
+
+-- /tt model <kind> [displayID]: test bar with the 3D model, report(ok, how) once
+-- it loaded or gave up. A displayID tries that ID instead of the table's one.
+function Bar:ModelCheck(kind, displayID, report)
+	if mode == "flight" or mode == "record" then
+		report(false, "busy: a flight is running")
+		return
+	end
+	local tune = FLYER_MODEL[kind]
+	if not tune then report(false, "no model entry") return end
+	if displayID then
+		local t = {}
+		for k, v in pairs(tune) do t[k] = v end
+		t.display, t.npc = displayID, nil -- just this ID, no SetCreature try
+		t.check = true                     -- a failed test ID doesn't block the kind
+		tune = t
+	end
+	modelFailed[kind] = nil
+	Bar:ShowTest(kind) -- with style cartoon this shows the sheet only
+	if FlyerStyle() ~= "model" then report(false, "style is cartoon (/tt flyer style model)") return end
+	HideModel() -- drop the load ShowTest started, then load with the report attached
+	modelReport = report
+	StartModel(kind, tune)
+end
+
 -- Known route: fill over the recorded time.
 -- isEstimate = true for a starter-list time: the time text gets a "~" in front.
 function Bar:StartFlight(fromName, toName, recorded, elapsed, isEstimate)
@@ -384,7 +631,7 @@ function Bar:StartFlight(fromName, toName, recorded, elapsed, isEstimate)
 	SetColor(COLOR_FLIGHT)
 	status:SetMinMaxValues(0, total)
 	status:SetValue(0)
-	iconFrame:Show()
+	ShowFlyer(true)
 	ShowCloud(true)
 end
 
@@ -394,7 +641,7 @@ function Bar:StartRecording(fromName, toName, elapsed)
 	SetColor(COLOR_RECORD)
 	status:SetMinMaxValues(0, 1)
 	status:SetValue(1)
-	iconFrame:Show()
+	ShowFlyer(true)
 	ShowCloud(false)
 	pulseAnim:Play()
 end
@@ -419,7 +666,8 @@ function Bar:Finish(recordedDur, landed)
 		sparkle:SetTexCoord(0, 0.25, 0, 1)
 		sparkleFrame:Show()
 	else
-		iconFrame:Hide()
+		ShowFlyer(false)
+		HideModel()
 	end
 	if recordedDur then
 		SetColor(COLOR_DONE)
@@ -438,19 +686,22 @@ function Bar:Finish(recordedDur, landed)
 end
 
 -- Test bar (also shown while unlocked, so there is something to drag)
-function Bar:ShowTest()
+function Bar:ShowTest(kind)
 	if mode == "flight" or mode == "record" then return end
+	Bar:SetFlyer(kind) -- nil: the faction's creature
 	total = 20
 	Begin("test", "Stormwind, Elwynn", "Sentinel Hill, Westfall", 0)
 	SetColor(COLOR_FLIGHT)
 	status:SetMinMaxValues(0, total)
-	iconFrame:Show()
+	ShowFlyer(true)
 	ShowCloud(true)
 end
 
 function Bar:HideTest()
 	if mode == "test" then
 		mode = nil
+		ShowFlyer(false)
+		HideModel()
 		frame:Hide()
 	end
 end

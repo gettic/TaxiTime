@@ -23,10 +23,41 @@ local EXPORT_MIN, EXPORT_MAX = 5, 3600 -- seconds; routes outside are left out (
 local GOSSIP_WINDOW = 15       -- a flight without a map click this soon after talking to an NPC is that NPC's flight
 local WATCH_TRIES = 8          -- control lost while idle: look for a taxi this many times, TICK apart
 
+------------------------------------------------------------------------
+-- Flying creature per start point (the bar's icon). Checked in this order:
+-- the user's /tt flyer choice (TaxiTimeDB.flyers), NODE_FLYER, NPC_FLYER,
+-- the Alliance-in-Kalimdor rule, else nil = the faction icon (as before).
+-- The art for each kind is in Bar.lua (FLYER_ART).
+------------------------------------------------------------------------
+
+local FLYER_KINDS = { gryphon = "gryphon", wyvern = "wind rider", bat = "bat", hippogryph = "hippogryph" }
+local FLYER_ALIASES = { windrider = "wyvern", wind = "wyvern", ["wind rider"] = "wyvern", hippo = "hippogryph" }
+
+-- start taxi node ID -> kind. Empty: no node IDs sourced yet (add only checked ones)
+local NODE_FLYER = {}
+
+-- flight master NPC ID -> kind. Sources (warcraft.wiki.gg NPC pages, Wowhead links there):
+--   4551 Michael Garrett <Bat Handler>, Undercity
+--   2226 Karos Razok <Bat Handler>, The Sepulcher (Silverpine Forest)
+--   2389 Zarise <Bat Handler>, Tarren Mill (Hillsbrad Foothills)
+--   3838 Vesprystus <Hippogryph Master>, Rut'theran Village (Teldrassil)
+--   3841 Caylais Moonfeather <Hippogryph Master>, Auberdine (Darkshore; the Classic ID)
+--   4267 Daelyshia <Hippogryph Master>, Astranaar (Ashenvale)
+-- Only the NPC ID part of a GUID is ever used (never the server or spawn parts).
+local NPC_FLYER = {
+	[4551] = "bat", [2226] = "bat", [2389] = "bat",
+	[3838] = "hippogryph", [3841] = "hippogryph", [4267] = "hippogryph",
+}
+
+-- Kalimdor continent uiMapIDs: 12 (warcraft.wiki.gg UiMapID) and 1414 (Classic map IDs)
+-- Rule from warcraft.wiki.gg "Flight path": Alliance flies hippogryphs in Kalimdor.
+local KALIMDOR = { [12] = true, [1414] = true }
+
 local DEFAULTS_BAR = {
 	point = "TOP", relPoint = "TOP", x = 0, y = -160,
 	width = 260, locked = true,
 	showTotals = true,         -- gold/time totals line under the bar
+	flyerStyle = "model",      -- "model" (the game's 3D creature) or "cartoon" (our sheets)
 }
 
 ------------------------------------------------------------------------
@@ -42,6 +73,8 @@ local taxiMapID
 local ticker
 local loading = false    -- true between PLAYER_LEAVING_WORLD and PLAYER_ENTERING_WORLD (+1 s)
 local lastGossip         -- { npcID, at }: last NPC talked to (for flights started from a talk option)
+local taxiNpcID          -- NPC ID of the flight master whose map was opened last (nil if unknown)
+local flyerSpot, flyerSpotName -- start point /tt flyer changes: node ID or "npc:<id>", and its name
 TT.lastKey = nil         -- key of the last route flown (for /tt forget)
 
 ------------------------------------------------------------------------
@@ -120,13 +153,55 @@ local function ZoneName()
 end
 
 -- "Creature-0-4372-1-1234-11798-0000ABCDEF" -> 11798
+-- A secret GUID (Midnight/Forever secret values) gives nil: never worked around.
 local function NpcIDFromGUID(guid)
+	if issecretvalue and issecretvalue(guid) then return nil end
 	if type(guid) ~= "string" then return nil end
 	local parts = {}
 	for p in guid:gmatch("[^%-]+") do parts[#parts + 1] = p end
 	if (parts[1] == "Creature" or parts[1] == "Vehicle") and parts[6] then
 		return tonumber(parts[6])
 	end
+	return nil
+end
+
+-- NPC ID of the unit we are talking to; read once per map/talk window, never polled
+local function TalkingNpcID()
+	if not UnitGUID then return nil end
+	local ok, guid = pcall(UnitGUID, "npc")
+	if not ok then return nil end
+	local ok2, id = pcall(NpcIDFromGUID, guid)
+	return ok2 and id or nil
+end
+
+-- true if the map (or one of its parents) is Kalimdor
+local function InKalimdor(mapID)
+	if not (C_Map and C_Map.GetMapInfo) then return false end
+	for _ = 1, 10 do
+		if not mapID then return false end
+		if KALIMDOR[mapID] then return true end
+		local ok, info = pcall(C_Map.GetMapInfo, mapID)
+		if not ok or type(info) ~= "table" or not info.parentMapID or info.parentMapID == 0 then return false end
+		mapID = info.parentMapID
+	end
+	return false
+end
+
+-- start point key for /tt flyer: the start node ID, else "npc:<id>", else nil
+local function FlyerSpot(nodeID, npcID)
+	if nodeID then return nodeID end
+	if npcID then return "npc:" .. npcID end
+	return nil
+end
+
+-- kind of creature ("gryphon", "wyvern", "bat", "hippogryph") or nil = faction icon
+function TT.FlyerFor(spot, nodeID, npcID, mapID)
+	local own = spot ~= nil and TT.db and TT.db.flyers and TT.db.flyers[spot]
+	if own and FLYER_KINDS[own] then return own end
+	if nodeID and NODE_FLYER[nodeID] then return NODE_FLYER[nodeID] end
+	if npcID and NPC_FLYER[npcID] then return NPC_FLYER[npcID] end
+	local faction = UnitFactionGroup and UnitFactionGroup("player")
+	if faction == "Alliance" and InKalimdor(mapID) then return "hippogryph" end
 	return nil
 end
 
@@ -163,6 +238,7 @@ local function InitDB()
 		if db.bar[k] == nil then db.bar[k] = v end
 	end
 	if db.tooltip == nil then db.tooltip = true end -- flight-map tooltip line
+	if type(db.flyers) ~= "table" then db.flyers = {} end -- /tt flyer choices: start point -> kind
 	if type(TaxiTimeCharDB) ~= "table" then TaxiTimeCharDB = {} end
 	db.totals = FillTotals(db.totals)                         -- all characters
 	TaxiTimeCharDB.totals = FillTotals(TaxiTimeCharDB.totals) -- this character
@@ -364,6 +440,7 @@ local function SaveActive(f)
 		noRecord = f.noRecord or nil,
 		listCost = f.listCost,
 		costDone = f.costDone or nil,
+		flyer = f.flyer, flyerSpot = f.flyerSpot, flyerName = f.flyerName,
 		lastSeen = time(),
 	}
 end
@@ -390,6 +467,20 @@ local function BeginFlight(info, elapsed)
 		costDone = (resumed and info.costDone) and true or nil,
 		lastTick = GetTime(), -- flown time counts from here (never the offline part)
 	}
+	-- flying creature: worked out at take-off (still at the start); a resumed
+	-- flight keeps the saved one (old saves without it: faction icon)
+	flight.flyerSpot = info.flyerSpot or FlyerSpot(info.fromNode, info.npcID)
+	flight.flyerName = info.flyerName or info.fromName
+	local s = flight.flyerSpot -- after a resume only the spot is saved: node ID or "npc:<id>"
+	flight.fromNode = info.fromNode or (type(s) == "number" and s or nil)
+	flight.npcID = info.npcID or (type(s) == "string" and tonumber(s:match("^npc:(%d+)$")) or nil)
+	if resumed then
+		flight.flyer = FLYER_KINDS[info.flyer] and info.flyer or nil
+	else
+		flight.startMap = PlayerMapID()
+		flight.flyer = TT.FlyerFor(flight.flyerSpot, info.fromNode, info.npcID, flight.startMap)
+	end
+	if flight.flyerSpot ~= nil then flyerSpot, flyerSpotName = flight.flyerSpot, flight.flyerName end
 	pending = nil
 	state = "flying"
 	TT.lastKey = flight.key
@@ -405,6 +496,7 @@ local function BeginFlight(info, elapsed)
 		if info.cost then SetCostDone(flight, info.cost) end
 	end
 
+	TT.Bar:SetFlyer(flight.flyer)
 	if flight.known then
 		TT.Bar:StartFlight(flight.fromName, flight.toName, refTime, elapsed, flight.estimate)
 	else
@@ -572,6 +664,7 @@ local function OnTakeTaxiNode(slot)
 		clickedAt = GetTime(),
 		listCost = to.cost,                    -- listed fare (copper), nil if unknown (see below)
 		lastMoney = GetMoney and GetMoney(),   -- gold before paying (the server charges later)
+		fromNode = from.nodeID, npcID = taxiNpcID, -- for the flying creature
 	}
 	if pending.listCost == nil and TaxiNodeCost then
 		local ok, cost = pcall(TaxiNodeCost, slot)
@@ -595,6 +688,7 @@ local function StartUntrackedFlight()
 	lastGossip = nil
 	if g and g.npcID and GetTime() - g.at <= GOSSIP_WINDOW then
 		info.key = "gossip:" .. g.npcID .. ":" .. (startMap or "?")
+		info.npcID = g.npcID
 	elseif startMap then
 		info.zoneStart = startMap
 		-- one known route from here: count down to it; else record ("?" until landing)
@@ -678,6 +772,11 @@ end
 function handlers.TAXIMAP_OPENED()
 	lastGossip = nil -- flight master map: its flights come through TakeTaxiNode
 	ScanTaxiMap()
+	taxiNpcID = TalkingNpcID() -- once per map open (nil if unknown or secret)
+	local spot = FlyerSpot(currentNode and currentNode.nodeID, taxiNpcID)
+	if spot ~= nil and state ~= "flying" then
+		flyerSpot, flyerSpotName = spot, currentNode and currentNode.name
+	end
 	TT.Tooltip:OnTaxiMapOpened()
 end
 
@@ -690,8 +789,7 @@ function handlers.PLAYER_CONTROL_LOST()
 end
 
 function handlers.GOSSIP_SHOW()
-	local guid = UnitGUID and UnitGUID("npc")
-	lastGossip = { npcID = NpcIDFromGUID(guid), at = GetTime() }
+	lastGossip = { npcID = TalkingNpcID(), at = GetTime() }
 end
 
 function handlers.PLAYER_CONTROL_GAINED()
@@ -735,7 +833,9 @@ local function Help()
 	Print("commands:")
 	Print("  /tt lock | unlock - lock the bar / unlock it to drag it")
 	Print("  /tt reset - put the bar back in its default place")
-	Print("  /tt test - show or hide a test bar")
+	Print("  /tt test - show or hide a test bar (/tt test bat: with a bat)")
+	Print("  /tt flyer gryphon | wind rider | bat | hippogryph | auto - the creature for flights from here")
+	Print("  /tt flyer style model | cartoon - 3D creature or cartoon picture; /tt model bat - check a 3D model")
 	Print("  /tt forget - forget the time of the current or last route")
 	Print("  /tt tooltip - show or hide flight times on the flight map")
 	Print("  /tt totals - gold spent and time flown; /tt totals on | off - line under the bar")
@@ -832,6 +932,57 @@ local function PrintTotals(label, t)
 		TT.FormatMoney(t.copper), TT.FormatLong(t.seconds), t.flights, date("%Y-%m-%d", t.since)))
 end
 
+-- /tt flyer <kind|auto>: the creature for flights from the last start point
+-- (the running flight's, else the last flight's or flight map's). Saved per
+-- start point in TaxiTimeDB.flyers; "auto" goes back to the automatic choice.
+local function FlyerCommand(rest)
+	local style = rest:match("^style ?(.*)$")
+	if style then
+		if style == "model" or style == "cartoon" then
+			TT.Bar:SetStyle(style)
+			Print(style == "model" and "flying creature: the game's 3D model (cartoon while it loads or if it can't be shown)."
+				or "flying creature: cartoon pictures.")
+		else
+			Print("use /tt flyer style model or /tt flyer style cartoon (now: " .. tostring(TT.db.bar.flyerStyle) .. ").")
+		end
+		return
+	end
+	local spot, name = flyerSpot, flyerSpotName
+	if flight and flight.flyerSpot ~= nil then spot, name = flight.flyerSpot, flight.flyerName end
+	local where = TT.ShortName(name or "this flight master")
+	if rest == "" then
+		if spot == nil then
+			Print("open a flight master's map or take a flight first, then /tt flyer bat (or gryphon, wind rider, hippogryph, auto).")
+		else
+			local own = TT.db.flyers[spot]
+			Print(string.format("flights from %s show: %s%s. Change with /tt flyer gryphon | wind rider | bat | hippogryph | auto.",
+				where, FLYER_KINDS[own] or "automatic choice", FLYER_KINDS[own] and " (your choice)" or ""))
+		end
+		return
+	end
+	if spot == nil then
+		Print("no start point yet: open a flight master's map or take a flight first.")
+		return
+	end
+	local kind = FLYER_ALIASES[rest] or rest
+	if kind == "auto" then
+		TT.db.flyers[spot] = nil
+		Print(string.format("flights from %s: automatic creature again.", where))
+	elseif FLYER_KINDS[kind] then
+		TT.db.flyers[spot] = kind
+		Print(string.format("flights from %s now show a %s.", where, FLYER_KINDS[kind]))
+	else
+		Print("use /tt flyer gryphon, wind rider, bat, hippogryph or auto.")
+		return
+	end
+	if flight and flight.flyerSpot == spot then
+		-- running flight from that start point: change the icon now
+		flight.flyer = TT.FlyerFor(spot, flight.fromNode, flight.npcID, flight.startMap)
+		if TaxiTimeCharDB.active then TaxiTimeCharDB.active.flyer = flight.flyer end
+		TT.Bar:SetFlyer(flight.flyer)
+	end
+end
+
 SLASH_TAXITIME1 = "/tt"
 SLASH_TAXITIME2 = "/taxitime"
 SlashCmdList.TAXITIME = function(msg)
@@ -847,8 +998,33 @@ SlashCmdList.TAXITIME = function(msg)
 	elseif cmd == "reset" then
 		TT.Bar:ResetPosition()
 		Print("bar position reset.")
-	elseif cmd == "test" then
-		TT.Bar:ToggleTest()
+	elseif word == "test" then
+		local kind = FLYER_ALIASES[rest] or rest
+		if rest ~= "" and FLYER_KINDS[kind] then
+			TT.Bar:ShowTest(kind) -- /tt test bat: test bar with that creature
+		else
+			TT.Bar:ToggleTest()
+		end
+	elseif word == "flyer" then
+		FlyerCommand(rest)
+	elseif word == "model" then
+		-- check: /tt model <kind> or /tt model <kind> <displayID>
+		local k, id = rest:match("^(.-) ?(%d*)$")
+		local kind = FLYER_ALIASES[k] or k
+		if not FLYER_KINDS[kind] then
+			Print("use /tt model gryphon | wind rider | bat | hippogryph (optional: a display ID to try).")
+		else
+			local displayID = tonumber(id)
+			Print(string.format("loading the %s model%s...", FLYER_KINDS[kind], displayID and (" (display ID " .. displayID .. ")") or ""))
+			TT.Bar:ModelCheck(kind, displayID, function(ok, how)
+				if ok then
+					Print(string.format("%s model shown (%s). /tt test hides the test bar.", FLYER_KINDS[kind],
+						how == "creature" and "via the creature ID" or "via the display ID"))
+				else
+					Print(string.format("%s model not shown (%s): the cartoon is used.", FLYER_KINDS[kind], tostring(how)))
+				end
+			end)
+		end
 	elseif cmd == "forget" then
 		local key = TT.lastKey
 		local route = key and TT.db.routes[key]
