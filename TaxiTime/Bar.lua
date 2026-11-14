@@ -54,12 +54,25 @@ local COLORS = {
 	colorRecord = { 1.0, 0.5, 0.1 },
 	done        = { 0.2, 0.8, 0.3 },  -- "Recorded" flash, fixed
 }
+-- Rank up (Rank.lua): a soft gold glow over the fill, flashing twice, and the
+-- line under the bar flashing with it. The glow is Blizzard's own highlight
+-- strip, by file name (never shipped); checked in Blizzard's UI source, forever
+-- branch (github.com/Gethe/wow-ui-source, Blizzard_UIPanels_Game/Mainline/
+-- QuestFrameTemplates.xml, quest title highlight). ready = false (or a failed
+-- SetTexture) -> the fill itself flashes gold instead.
+local RANK_GLOW = { file = "Interface\\QuestFrame\\UI-QuestTitleHighlight", ready = true }
+local RANK_GOLD = { 1, 0.82, 0 }  -- Blizzard's normal (gold) text colour
+local RANK_FLASH = 0.3            -- seconds per half flash (2 flashes = 1.2 s)
+local RANK_FADE_DELAY = 3         -- bar stays this long after a rank up
+local RANK_GOLD_HEX = string.format("|cff%02x%02x%02x", math.floor(RANK_GOLD[1] * 255 + 0.5),
+	math.floor(RANK_GOLD[2] * 255 + 0.5), math.floor(RANK_GOLD[3] * 255 + 0.5))
 
 local frame, status, iconFrame, icon, leftText, rightText
 local totalsText      -- "Spent ... | Flown ..." line under the bar
 local lastMoneyText, lastCopper -- cache for the coin string
 local cloud, sparkleFrame, sparkle
 local pulseAnim, fadeAnim
+local rankGlow, glowAnim, textFlash -- rank-up glow (nil glow = gold fill flash) and line flash
 local iconMask        -- round mask for Blizzard icons (added only while one is shown)
 local maskOn = false
 local iconIsSheet = false -- true: custom flap sheet, false: Blizzard icon
@@ -201,21 +214,39 @@ local function StopAnims()
 	frame:SetAlpha(1)
 	StopSparkle()
 	flapIndex = nil
+	if glowAnim then glowAnim:Stop() end
+	if rankGlow then rankGlow:Hide() end
+	if textFlash then textFlash:Stop() end
+	if totalsText then totalsText:SetAlpha(1) end
 end
 
--- this character's totals under the bar (TT.charTotals, filled by Core)
+-- this character's totals and Taxi Time rank under the bar (TT.charTotals,
+-- filled by Core; rank from Rank.lua). Each part has its own setting.
+local SEP = "  |cff777777|||r  "
 local function UpdateTotals()
 	if not totalsText then return end
 	local t = TT.charTotals
-	if not (t and TT.db.bar.showTotals) then
+	local b = TT.db.bar
+	local showTotals = t and b.showTotals
+	local showRank = t and b.showRank and TT.RankFor
+	if not (showTotals or showRank) then
 		totalsText:Hide()
 		return
 	end
-	if t.copper ~= lastCopper then
-		lastCopper = t.copper
-		lastMoneyText = TT.FormatMoney(t.copper)
+	local text = ""
+	if showTotals then
+		if t.copper ~= lastCopper then
+			lastCopper = t.copper
+			lastMoneyText = TT.FormatMoney(t.copper)
+		end
+		text = "|cffb0b0b0Spent|r " .. lastMoneyText .. SEP .. "|cffb0b0b0Flown|r " .. TT.FormatLong(t.seconds)
 	end
-	totalsText:SetText("|cffb0b0b0Spent|r " .. lastMoneyText .. "  |cff777777|||r  |cffb0b0b0Flown|r " .. TT.FormatLong(t.seconds))
+	if showRank then
+		local r, title = TT.RankFor(t)
+		local rank = "|cffb0b0b0Rank|r " .. RANK_GOLD_HEX .. r .. "|r " .. title
+		text = (text ~= "") and (text .. SEP .. rank) or rank
+	end
+	totalsText:SetText(text)
 	totalsText:Show()
 end
 
@@ -407,6 +438,35 @@ function Bar:Create()
 	pulse:SetSmoothing("IN_OUT")
 	pulseAnim:SetLooping("BOUNCE")
 
+	-- rank up: two quick flashes (from -> to -> from, twice) on a region
+	local function TwoFlashes(region, from, to)
+		local g = region:CreateAnimationGroup()
+		for i = 1, 4 do
+			local a = g:CreateAnimation("Alpha")
+			local up = (i % 2 == 1)
+			a:SetFromAlpha(up and from or to)
+			a:SetToAlpha(up and to or from)
+			a:SetDuration(RANK_FLASH)
+			a:SetOrder(i)
+		end
+		return g
+	end
+	if RANK_GLOW.ready then
+		rankGlow = status:CreateTexture(nil, "OVERLAY")
+		if rankGlow:SetTexture(RANK_GLOW.file) == false then
+			rankGlow = nil -- texture missing: gold fill flash instead
+		else
+			rankGlow:SetAllPoints(status)
+			rankGlow:SetBlendMode("ADD")
+			rankGlow:SetVertexColor(RANK_GOLD[1], RANK_GOLD[2], RANK_GOLD[3])
+			rankGlow:SetAlpha(0)
+			rankGlow:Hide()
+			glowAnim = TwoFlashes(rankGlow, 0, 1)
+			glowAnim:SetScript("OnFinished", function() rankGlow:Hide() end)
+		end
+	end
+	textFlash = TwoFlashes(totalsText, 1, 0.3)
+
 	-- fade-out after landing
 	fadeAnim = frame:CreateAnimationGroup()
 	local fade = fadeAnim:CreateAnimation("Alpha")
@@ -581,9 +641,42 @@ function Bar:SetLocked(locked)
 end
 
 -- /tt totals on|off (the setting itself is TaxiTimeDB.bar.showTotals)
-function Bar:SetShowTotals(show)
-	if not totalsText then return end
-	if show then UpdateTotals() else totalsText:Hide() end
+function Bar:SetShowTotals()
+	UpdateTotals() -- the rank part may still show
+end
+
+-- /tt rank on|off and the Options checkbox (TaxiTimeDB.bar.showRank)
+function Bar:SetShowRank()
+	UpdateTotals()
+end
+
+-- Rank.lua: the rank went up at this landing. Refresh the line; if the landed
+-- bar is still up, flash the glow (or the fill in gold) and the line twice,
+-- and keep the bar up a moment longer. No sound of its own.
+function Bar:RankUp()
+	if not frame then return end
+	UpdateTotals()
+	if not (frame:IsShown() and mode == "done" and TT.db.bar.showRank) then return end
+	fadeAnim:Stop()
+	frame:SetAlpha(1)
+	doneToken = doneToken + 1
+	local token = doneToken
+	if rankGlow then
+		glowAnim:Stop()
+		rankGlow:Show()
+		glowAnim:Play()
+	else
+		status:SetStatusBarColor(RANK_GOLD[1], RANK_GOLD[2], RANK_GOLD[3])
+		C_Timer.After(RANK_FLASH * 4, function()
+			if token == doneToken and colorKey then SetColor(colorKey) end
+		end)
+	end
+	textFlash:Stop()
+	textFlash:Play()
+	Bar.rankPulses = (Bar.rankPulses or 0) + 1 -- (count for the offline tests)
+	C_Timer.After(RANK_FADE_DELAY, function()
+		if token == doneToken and mode == "done" then fadeAnim:Play() end
+	end)
 end
 
 ------------------------------------------------------------------------

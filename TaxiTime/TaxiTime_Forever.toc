@@ -1,13 +1,14 @@
 ## Interface: 16001
 ## Title: Taxi Time
 ## Notes: Records how long each flight path takes and shows a progress bar on later flights.
-## Version: 0.2.1-beta.2
+## Version: 0.2.1-beta.3
 ## IconTexture: Interface\Icons\Ability_Mount_Gryphon_01
 ## SavedVariables: TaxiTimeDB
 ## SavedVariablesPerCharacter: TaxiTimeCharDB
 
 StarterTimes.lua
 Core.lua
+Rank.lua
 Bar.lua
 Tooltip.lua
 Options.lua

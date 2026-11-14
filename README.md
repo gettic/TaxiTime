@@ -4,13 +4,14 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.1-beta.2. Please report any problems you find.
+Version 0.2.1-beta.3. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
 - [The flying creature](#the-flying-creature)
 - [Flight-map tooltips](#flight-map-tooltips)
 - [Flight totals](#flight-totals)
+- [Flight rank](#flight-rank)
 - [Options panel](#options-panel)
 - [Starter times and export](#starter-times-and-export)
 - [Slash commands](#slash-commands)
@@ -78,6 +79,18 @@ A small line under the bar shows what this character has spent on flights and ho
 
 `/tt totals` prints the totals for this character and for all your characters, with the number of flights and the start date. `/tt totals off` hides the line under the bar, `/tt totals on` shows it again.
 
+## Flight rank
+
+Every character earns a Taxi Time rank from 1 to 30, each with a funny title ("Grounded", "Frequent Flapper", "Cloud Mayor", "Taxi Legend"). It is the addon's own fun rank, not a game title or achievement.
+
+- **XP:** 1 XP per minute flown, plus 2 XP per flight.
+- **Pace:** about 9 hours in the air for rank 10, 47 hours for rank 20 and 116 hours for rank 30.
+- **Past flights count:** the rank is worked out from your flight totals, so flights since the totals started (see [Flight totals](#flight-totals)) already count.
+- **Where you see it:** in the line under the bar, like `Rank 7 Frequent Flapper`. When you rank up, the chat says so and the bar glows briefly.
+- **Hide it:** `/tt rank off`, or untick "Show rank under the bar" in the options. `/tt rank on` shows it again.
+
+`/tt rank` prints the rank and progress to the next one, for this character and for all your characters together.
+
 ## Options panel
 
 Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options > AddOns > Taxi Time.
@@ -90,6 +103,7 @@ Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options
 | Width | Length of the bar, 160 to 500. |
 | Scale | Size of the whole bar, 70% to 160%. |
 | Show totals under the bar | Shows or hides the totals line. |
+| Show rank under the bar | Shows or hides your rank in that line. |
 | Flying bar colour | Fill colour of the bar on a route with a saved time. |
 | Recording bar colour | Fill colour on a route's first flight. |
 | Reset colours | Back to the default blue and orange. |
@@ -127,6 +141,7 @@ Type `/tt` or `/taxitime`, followed by:
 | `forget` | Forgets the saved time of the route you are flying or flew last. |
 | `tooltip` | Turns the times on the flight map on or off. |
 | `totals` | Prints gold spent and time flown. `totals on` / `totals off` shows or hides the line under the bar. |
+| `rank` | Prints your Taxi Time rank and progress. `rank on` / `rank off` shows or hides it under the bar. |
 | `sound` | Turns the landing sound on or off. `sound on` / `sound off` sets it. |
 | `export` | Opens a window with your saved times to copy. |
 
@@ -158,8 +173,9 @@ The addon's own pictures (the bar frame, fill, pixel-art flyers, cloud and spark
 | `TaxiTime/TaxiTime_Forever.toc` | Addon info: interface 16001, version, saved variables. |
 | `TaxiTime/StarterTimes.lua` | The starter times list (empty in this version). |
 | `TaxiTime/Core.lua` | Finds take-off and landing, saves route times, counts totals, the `/tt` command and export window. |
+| `TaxiTime/Rank.lua` | The Taxi Time rank: XP from the saved totals, titles, rank-up message, `/tt rank`. |
 | `TaxiTime/Options.lua` | The options panel in the game's Settings window, and the one place settings are changed (`TT.SetOption`). |
-| `TaxiTime/Bar.lua` | The bar, the flying creature (pixel art), cloud, sparkle and the totals line. |
+| `TaxiTime/Bar.lua` | The bar, the flying creature (pixel art), cloud, sparkle and the totals and rank line. |
 | `TaxiTime/Tooltip.lua` | The time line in the flight-map tooltips. |
 | `TaxiTime/media/` | The art (`.tga` files). |
 | `art-source/make_art.py` | Draws the bar frame, fill, cloud and sparkle. |
@@ -169,7 +185,7 @@ Saved data:
 
 | Saved variable | Holds |
 |---|---|
-| `TaxiTimeDB` (account) | Route times, the bar's position, size, colours and creature choice, the tooltip and totals-line settings, your creature choices per flight master, and all characters' totals. |
-| `TaxiTimeCharDB` (per character) | This character's totals, and the flight in progress, so it can be shown again after a login. |
+| `TaxiTimeDB` (account) | Route times, the bar's position, size, colours and creature choice, the tooltip, totals and rank settings, your creature choices per flight master, and all characters' totals. |
+| `TaxiTimeCharDB` (per character) | This character's totals, the last rank announced, and the flight in progress, so it can be shown again after a login. |
 
 The settings for recording (minimum flight time, the 80% rule, landing distance) are constants at the top of `Core.lua`. Setting `USE_CUSTOM_ART = false` at the top of `Bar.lua` switches to a plain look with the game's own icons, for example if the picture files don't load.

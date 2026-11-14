@@ -25,6 +25,7 @@ local OPTIONS = {
 	width      = { tbl = "bar", kind = "number", apply = function() TT.Bar:ApplySize() end },
 	scale      = { tbl = "bar", kind = "number", apply = function() TT.Bar:ApplyScale() end },
 	showTotals = { tbl = "bar", kind = "boolean", apply = function(v) TT.Bar:SetShowTotals(v) end },
+	showRank   = { tbl = "bar", kind = "boolean", apply = function() TT.Bar:SetShowRank() end },
 	flyer      = { tbl = "bar", kind = "string", apply = function() TT.RefreshFlyer() end },
 	tooltip    = { tbl = "db", kind = "boolean" }, -- read on each flight-map hover
 	landSound  = { tbl = "db", kind = "boolean", apply = function(v) if v then TT.Bar:PlayLandSound() end end }, -- on = preview once
@@ -199,6 +200,8 @@ local function Build()
 	Slider("scale", "Scale", d.scale, "Size of the whole bar: frame, text and creature.",
 		function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 	Checkbox("showTotals", "Show totals under the bar", d.showTotals, "Gold spent and time flown by this character.")
+	Checkbox("showRank", "Show rank under the bar", d.showRank,
+		"Your Taxi Time rank, from minutes flown and flights. /tt rank for details.")
 
 	Header("Colours")
 	Button("Flying bar colour", "Choose...", function() PickColor("colorFlight") end,

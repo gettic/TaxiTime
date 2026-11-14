@@ -58,6 +58,7 @@ local DEFAULTS_BAR = {
 	point = "TOP", relPoint = "TOP", x = 0, y = -160,
 	width = 260, locked = true,
 	showTotals = true,         -- gold/time totals line under the bar
+	showRank = true,           -- Taxi Time rank in that line (Rank.lua)
 	scale = 1,                 -- Options panel: bar scale (factor)
 	flyer = "auto",            -- Options panel: "auto" | a FLYER_KINDS key | "none"
 	landSparkle = true,        -- Options panel: sparkle on a clean landing
@@ -259,7 +260,7 @@ local function InitDB()
 		elseif v < lim[1] then bar[k] = lim[1]
 		elseif v > lim[2] then bar[k] = lim[2] end
 	end
-	for _, k in ipairs({ "locked", "showTotals", "landSparkle" }) do
+	for _, k in ipairs({ "locked", "showTotals", "landSparkle", "showRank" }) do
 		if type(bar[k]) ~= "boolean" then bar[k] = DEFAULTS_BAR[k] end
 	end
 	if not (bar.flyer == "auto" or bar.flyer == "none" or FLYER_KINDS[bar.flyer]) then bar.flyer = "auto" end
@@ -273,6 +274,7 @@ local function InitDB()
 	TT.charTotals = TaxiTimeCharDB.totals
 	TT.db = db
 	TT.defaultsBar = DEFAULTS_BAR
+	if TT.RankInit then TT.RankInit() end -- rankShown for old saves (Rank.lua)
 end
 
 ------------------------------------------------------------------------
@@ -577,7 +579,7 @@ local function PushTime(route, dur)
 end
 TT.PushTime = PushTime
 
-local function EndFlight()
+local function FinishFlight()
 	local f = flight
 	flight = nil
 	state = "idle"
@@ -675,6 +677,14 @@ local function EndFlight()
 	else
 		TT.Bar:Finish(nil, true)
 	end
+end
+
+-- landing: route and totals first, then the rank check (every flight counts
+-- for the rank, recorded or not; the bar is in its "done" look by then)
+local function EndFlight()
+	local hadFlight = flight ~= nil
+	FinishFlight()
+	if hadFlight and TT.CheckRankUp then TT.CheckRankUp() end
 end
 
 CheckTaxi = function()
@@ -869,6 +879,7 @@ function handlers.PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
 	-- give the client a moment before trusting UnitOnTaxi again
 	C_Timer.After(1, function()
 		loading = false
+		if TT.RankStartNote then TT.RankStartNote() end -- once: "you start at Rank N"
 		if state ~= "idle" then
 			CheckTaxi()
 		elseif (isInitialLogin or isReloadingUi) and TaxiTimeCharDB.active then
@@ -903,6 +914,7 @@ local function Help()
 	Print("  /tt tooltip - show or hide flight times on the flight map")
 	Print("  /tt totals - gold spent and time flown; /tt totals on | off - line under the bar")
 	Print("  /tt sound [on | off] - sound when you land")
+	Print("  /tt rank - your Taxi Time rank from flying; /tt rank on | off - rank under the bar")
 	Print("  /tt export - your recorded times as text to copy (for the starter list)")
 end
 
@@ -1112,6 +1124,15 @@ SlashCmdList.TAXITIME = function(msg)
 			return
 		end
 		Print("landing sound " .. (TT.db.landSound and "on." or "off."))
+	elseif word == "rank" and TT.PrintRank then
+		if rest == "" then
+			TT.PrintRank()
+		elseif rest == "on" or rest == "off" then
+			TT.SetOption("showRank", rest == "on")
+			Print("rank under the bar " .. (rest == "on" and "on." or "off."))
+		else
+			Print("use /tt rank, /tt rank on or /tt rank off.")
+		end
 	elseif cmd == "export" then
 		ShowExport()
 	else
