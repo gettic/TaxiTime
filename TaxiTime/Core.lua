@@ -13,6 +13,7 @@ local TICK = 0.25              -- seconds between UnitOnTaxi checks while pendin
 local TAKEOFF_TIMEOUT = 10     -- seconds after the click to wait for take-off
 local MIN_FLIGHT = 5           -- flights shorter than this are never recorded
 local SHORT_RATIO = 0.8        -- known route: shorter than 80% of the time = cut short
+local AVG_COUNT = 5            -- a route's time = median of its last this-many clean flights
 local LAND_DIST = 0.05         -- first flight: max distance (map units 0..1) from destination
 local RESUME_MAX_AGE = 3600    -- ignore a saved active flight older than this (seconds)
 local COST_WINDOW = 5          -- seconds after take-off to wait for the fare's gold drop
@@ -59,6 +60,7 @@ local DEFAULTS_BAR = {
 	showTotals = true,         -- gold/time totals line under the bar
 	scale = 1,                 -- Options panel: bar scale (factor)
 	flyer = "auto",            -- Options panel: "auto" | a FLYER_KINDS key | "none"
+	landSparkle = true,        -- Options panel: sparkle on a clean landing
 	-- colorFlight / colorRecord ({ r, g, b }) are only saved once picked: nil = Bar.lua's default
 	-- (bar.flyerStyle from v0.2.0-beta.1 is no longer used; old saves keep it, unread)
 }
@@ -257,11 +259,12 @@ local function InitDB()
 		elseif v < lim[1] then bar[k] = lim[1]
 		elseif v > lim[2] then bar[k] = lim[2] end
 	end
-	for _, k in ipairs({ "locked", "showTotals" }) do
+	for _, k in ipairs({ "locked", "showTotals", "landSparkle" }) do
 		if type(bar[k]) ~= "boolean" then bar[k] = DEFAULTS_BAR[k] end
 	end
 	if not (bar.flyer == "auto" or bar.flyer == "none" or FLYER_KINDS[bar.flyer]) then bar.flyer = "auto" end
 	if type(db.tooltip) ~= "boolean" then db.tooltip = true end -- flight-map tooltip line
+	if type(db.landSound) ~= "boolean" then db.landSound = true end -- sound on a clean landing
 	if type(db.flyers) ~= "table" then db.flyers = {} end -- /tt flyer choices: start point -> kind
 	if type(TaxiTimeCharDB) ~= "table" then TaxiTimeCharDB = {} end
 	db.totals = FillTotals(db.totals)                         -- all characters
@@ -541,6 +544,39 @@ local function LandedNearDest(f)
 	return (dx * dx + dy * dy) <= LAND_DIST * LAND_DIST
 end
 
+-- median of a list of numbers (1 = itself, even count = mean of the middle two)
+local function Median(list)
+	local s = {}
+	for i = 1, #list do s[i] = list[i] end
+	table.sort(s)
+	local n = #s
+	if n == 0 then return nil end
+	if n % 2 == 1 then return s[(n + 1) / 2] end
+	return (s[n / 2] + s[n / 2 + 1]) / 2
+end
+TT.Median = Median
+
+-- Adds a clean flight time to route.times (last AVG_COUNT kept) and sets
+-- route.time to their median. Old saves without a list start from route.time.
+local function PushTime(route, dur)
+	local list = route.times
+	local okList = type(list) == "table"
+	if okList then
+		for i = 1, #list do
+			if type(list[i]) ~= "number" or list[i] ~= list[i] or list[i] <= 0 then okList = false; break end
+		end
+	end
+	if not okList then
+		list = {}
+		if type(route.time) == "number" and route.time > 0 then list[1] = route.time end
+	end
+	list[#list + 1] = dur
+	while #list > AVG_COUNT do table.remove(list, 1) end
+	route.times = list
+	route.time = math.floor(Median(list) * 10 + 0.5) / 10
+end
+TT.PushTime = PushTime
+
 local function EndFlight()
 	local f = flight
 	flight = nil
@@ -613,14 +649,16 @@ local function EndFlight()
 	end
 	route.from = f.fromName
 	route.to = f.toName
-	route.time = dur
 	if recTime and dur < recTime * SHORT_RATIO then
-		-- correction of a bad (too long) saved time: the old best can't be trusted
+		-- correction of a bad (too long) saved time: the old best and old times can't be trusted
 		route.best = dur
+		route.times = { dur }
+		route.time = dur
 		Print(string.format("Updated %s > %s: %s -> %s", TT.ShortName(f.fromName), TT.ShortName(f.toName),
 			TT.FormatTime(recTime), TT.FormatTime(dur)))
 	else
 		route.best = route.best and math.min(route.best, dur) or dur
+		PushTime(route, dur) -- route.time = median of the last AVG_COUNT clean flights
 	end
 	route.count = (route.count or 0) + 1
 	route.recorded = route.recorded or time()
@@ -864,6 +902,7 @@ local function Help()
 	Print("  /tt forget - forget the time of the current or last route")
 	Print("  /tt tooltip - show or hide flight times on the flight map")
 	Print("  /tt totals - gold spent and time flown; /tt totals on | off - line under the bar")
+	Print("  /tt sound [on | off] - sound when you land")
 	Print("  /tt export - your recorded times as text to copy (for the starter list)")
 end
 
@@ -1063,6 +1102,16 @@ SlashCmdList.TAXITIME = function(msg)
 		else
 			Print("use /tt totals, /tt totals on or /tt totals off.")
 		end
+	elseif word == "sound" then
+		if rest == "on" or rest == "off" then
+			TT.SetOption("landSound", rest == "on")
+		elseif rest == "" then
+			TT.SetOption("landSound", not TT.db.landSound)
+		else
+			Print("use /tt sound, /tt sound on or /tt sound off.")
+			return
+		end
+		Print("landing sound " .. (TT.db.landSound and "on." or "off."))
 	elseif cmd == "export" then
 		ShowExport()
 	else

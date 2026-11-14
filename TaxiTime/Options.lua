@@ -27,6 +27,8 @@ local OPTIONS = {
 	showTotals = { tbl = "bar", kind = "boolean", apply = function(v) TT.Bar:SetShowTotals(v) end },
 	flyer      = { tbl = "bar", kind = "string", apply = function() TT.RefreshFlyer() end },
 	tooltip    = { tbl = "db", kind = "boolean" }, -- read on each flight-map hover
+	landSound  = { tbl = "db", kind = "boolean", apply = function(v) if v then TT.Bar:PlayLandSound() end end }, -- on = preview once
+	landSparkle = { tbl = "bar", kind = "boolean" }, -- read at each landing
 	colorFlight = { tbl = "bar", kind = "color", apply = function() TT.Bar:ApplyColors() end },
 	colorRecord = { tbl = "bar", kind = "color", apply = function() TT.Bar:ApplyColors() end },
 }
@@ -217,6 +219,12 @@ local function Build()
 			return c:GetData()
 		end, "Automatic matches the flight master. A creature picked with /tt flyer for one flight master still wins.")
 	end
+
+	Header("Landing")
+	Checkbox("landSound", "Play a sound when you land", true,
+		"A short Blizzard ping when a flight lands normally. Follows the game's Sound Effects volume.")
+	Checkbox("landSparkle", "Sparkle when you land", d.landSparkle,
+		"A small sparkle where the creature stops on the bar.")
 
 	Header("Flight map")
 	Checkbox("tooltip", "Show times on the flight map", true, "Adds the flight time to the flight map's tooltips.")

@@ -41,6 +41,12 @@ local CLOUD_ALPHA = 0.85
 local SPARKLE_STEP = 0.12        -- seconds per sparkle frame
 local SPARKLE_TIME = 1.0         -- sparkle shown for this long
 local FLYER_KEEP = 0.5           -- flyer stays this long after a real landing
+-- Landing sound: Blizzard's own sound kit, by its SOUNDKIT key (never a shipped
+-- file). Played on the "SFX" channel, so the game's Sound Effects switch, its
+-- volume and the master mute apply. If the key is missing on a client nothing
+-- plays (no unverified fallback number). PlaySound: warcraft.wiki.gg "API PlaySound".
+local LAND_SOUND = "MAP_PING"
+local LAND_SOUND_CHANNEL = "SFX"
 -- Fill colours in one place. colorFlight / colorRecord can be changed in the
 -- Options panel (saved in TaxiTimeDB.bar only once picked; nil = this default).
 local COLORS = {
@@ -481,6 +487,15 @@ function Bar:StartRecording(fromName, toName, elapsed)
 	pulseAnim:Play()
 end
 
+-- Plays the landing sound once (also the Options preview). Nothing if the
+-- client has no PlaySound or no such SOUNDKIT key.
+function Bar:PlayLandSound()
+	local id = SOUNDKIT and SOUNDKIT[LAND_SOUND]
+	if type(id) == "number" and PlaySound then
+		pcall(PlaySound, id, LAND_SOUND_CHANNEL)
+	end
+end
+
 -- Landed. recordedDur = the new time if this flight was just recorded.
 -- landed = true for a real landing at the destination (shows the sparkle).
 function Bar:Finish(recordedDur, landed)
@@ -493,7 +508,8 @@ function Bar:Finish(recordedDur, landed)
 	mode = "done"
 	UpdateTotals() -- includes this flight's last seconds and fare
 	ShowCloud(false)
-	if landed and sparkleFrame then
+	if landed and TT.db and TT.db.landSound then Bar:PlayLandSound() end
+	if landed and sparkleFrame and TT.db and TT.db.bar.landSparkle ~= false then
 		-- flyer stays a moment, then the sparkle takes its place
 		landTime = GetTime()
 		sparkleFrame:ClearAllPoints()

@@ -4,7 +4,7 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.1-beta.1. Please report any problems you find.
+Version 0.2.1-beta.2. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
@@ -32,7 +32,7 @@ Version 0.2.1-beta.1. Please report any problems you find.
 | First flight of a route | An orange, pulsing "Recording" bar that counts up. When you land, it turns green and shows the saved time. |
 | Later flights | A blue bar that fills over the saved time, with the flying creature moving along the top, a cloud drifting by and the time left ("1:12 / 2:05"). |
 | Longer than the saved time | The bar stays full and shows the extra time, like "+0:04". |
-| Landing | When the time is saved, a small sparkle where the flyer lands. Then the bar fades out. |
+| Landing | When the time is saved, a short ping and a small sparkle where the flyer lands. Then the bar fades out. Both can be switched off in the options. |
 
 The saved times are shared by all your characters on the account.
 
@@ -42,7 +42,7 @@ Some flights don't start from the flight map. For example, the druid flights bet
 
 ### Times correct themselves
 
-Every clean flight saves its time as the route's new time, so a route's time stays up to date. If a new time is much shorter than the saved one (less than 80% of it), it only counts when you land at the destination. Then the chat says `Updated A > B: old -> new`.
+A route's time is the median of your last 5 clean flights, so one odd slow flight doesn't change it. A time saved by an older version counts as the first of the 5. If a new time is much shorter than the saved one (less than 80% of it), it only counts when you land at the destination. Then the chat says `Updated A > B: old -> new`.
 
 ### Flights that are not recorded
 
@@ -94,6 +94,8 @@ Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options
 | Recording bar colour | Fill colour on a route's first flight. |
 | Reset colours | Back to the default blue and orange. |
 | Creature | Automatic, Gryphon, Wind rider, Bat, Hippogryph or None (no creature). |
+| Play a sound when you land | A short Blizzard ping after a clean landing. Follows the game's Sound Effects volume. |
+| Sparkle when you land | Shows or hides the small sparkle after a clean landing. |
 | Show times on the flight map | Shows or hides the times in the map tooltips. |
 
 Colours use the game's own colour picker. Cancel in the picker puts the old colour back.
@@ -125,6 +127,7 @@ Type `/tt` or `/taxitime`, followed by:
 | `forget` | Forgets the saved time of the route you are flying or flew last. |
 | `tooltip` | Turns the times on the flight map on or off. |
 | `totals` | Prints gold spent and time flown. `totals on` / `totals off` shows or hides the line under the bar. |
+| `sound` | Turns the landing sound on or off. `sound on` / `sound off` sets it. |
 | `export` | Opens a window with your saved times to copy. |
 
 The bar starts locked. `/tt` on its own lists the commands.
