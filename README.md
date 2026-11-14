@@ -4,13 +4,14 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.0. Please report any problems you find.
+Version 0.2.1-beta.1. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
 - [The flying creature](#the-flying-creature)
 - [Flight-map tooltips](#flight-map-tooltips)
 - [Flight totals](#flight-totals)
+- [Options panel](#options-panel)
 - [Starter times and export](#starter-times-and-export)
 - [Slash commands](#slash-commands)
 - [Chat messages](#chat-messages)
@@ -69,13 +70,35 @@ At a flight master, point at a destination on the map. The tooltip shows `Taxi T
 
 ## Flight totals
 
-A small line under the bar shows what this character has spent on flights and how long it has flown, like `Spent 12g 34s 50c | Flown 3h 12m`.
+A small line under the bar shows what this character has spent on flights and how long it has flown, like `Spent 12g 34s 50c | Flown 3h 12m`. Under one minute it shows seconds, like `Flown 45s`.
 
 - The gold is what you really paid, so reputation discounts count. If the addon misses the payment, it uses the price on the map.
 - Flown time counts every flight, also ones that are not recorded. Time logged out or on loading screens doesn't count.
 - Counting starts the first time you log in with this version.
 
 `/tt totals` prints the totals for this character and for all your characters, with the number of flights and the start date. `/tt totals off` hides the line under the bar, `/tt totals on` shows it again.
+
+## Options panel
+
+Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options > AddOns > Taxi Time.
+
+| Setting | What it does |
+|---|---|
+| Lock bar | Locks or unlocks the bar. Unlocked shows a test bar you can drag. |
+| Reset (position) | Puts the bar back in its default place. |
+| Show / hide (test bar) | Shows a test bar, so you can see your changes. Not during a flight. |
+| Width | Length of the bar, 160 to 500. |
+| Scale | Size of the whole bar, 70% to 160%. |
+| Show totals under the bar | Shows or hides the totals line. |
+| Flying bar colour | Fill colour of the bar on a route with a saved time. |
+| Recording bar colour | Fill colour on a route's first flight. |
+| Reset colours | Back to the default blue and orange. |
+| Creature | Automatic, Gryphon, Wind rider, Bat, Hippogryph or None (no creature). |
+| Show times on the flight map | Shows or hides the times in the map tooltips. |
+
+Colours use the game's own colour picker. Cancel in the picker puts the old colour back.
+
+A creature you picked with `/tt flyer` for one flight master still wins over the panel's choice. The `/tt` commands and the panel stay in sync.
 
 ## Starter times and export
 
@@ -93,6 +116,7 @@ Type `/tt` or `/taxitime`, followed by:
 
 | Command | What it does |
 |---|---|
+| `options` (or `config`) | Opens the options panel. |
 | `unlock` | Unlocks the bar and shows a test bar, so you can drag it where you want. |
 | `lock` | Locks the bar again. A locked bar lets clicks go through it. |
 | `reset` | Puts the bar back in its default place (top middle of the screen). |
@@ -115,7 +139,6 @@ The bar starts locked. `/tt` on its own lists the commands.
 
 ## Known limits
 
-- There is no options window yet: the bar's size and colours can't be changed.
 - `/tt forget` only knows routes flown since you last logged in or reloaded.
 - After a login, a flight that started more than an hour ago is not shown again.
 - If the game can't tell where you landed, the flight is trusted and saved.
@@ -132,6 +155,7 @@ The addon's own pictures (the bar frame, fill, pixel-art flyers, cloud and spark
 | `TaxiTime/TaxiTime_Forever.toc` | Addon info: interface 16001, version, saved variables. |
 | `TaxiTime/StarterTimes.lua` | The starter times list (empty in this version). |
 | `TaxiTime/Core.lua` | Finds take-off and landing, saves route times, counts totals, the `/tt` command and export window. |
+| `TaxiTime/Options.lua` | The options panel in the game's Settings window, and the one place settings are changed (`TT.SetOption`). |
 | `TaxiTime/Bar.lua` | The bar, the flying creature (pixel art), cloud, sparkle and the totals line. |
 | `TaxiTime/Tooltip.lua` | The time line in the flight-map tooltips. |
 | `TaxiTime/media/` | The art (`.tga` files). |
@@ -142,7 +166,7 @@ Saved data:
 
 | Saved variable | Holds |
 |---|---|
-| `TaxiTimeDB` (account) | Route times, the bar's position, the tooltip and totals-line settings, your creature choices per flight master, and all characters' totals. |
+| `TaxiTimeDB` (account) | Route times, the bar's position, size, colours and creature choice, the tooltip and totals-line settings, your creature choices per flight master, and all characters' totals. |
 | `TaxiTimeCharDB` (per character) | This character's totals, and the flight in progress, so it can be shown again after a login. |
 
 The settings for recording (minimum flight time, the 80% rule, landing distance) are constants at the top of `Core.lua`. Setting `USE_CUSTOM_ART = false` at the top of `Bar.lua` switches to a plain look with the game's own icons, for example if the picture files don't load.

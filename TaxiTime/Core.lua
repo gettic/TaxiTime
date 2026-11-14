@@ -57,8 +57,16 @@ local DEFAULTS_BAR = {
 	point = "TOP", relPoint = "TOP", x = 0, y = -160,
 	width = 260, locked = true,
 	showTotals = true,         -- gold/time totals line under the bar
+	scale = 1,                 -- Options panel: bar scale (factor)
+	flyer = "auto",            -- Options panel: "auto" | a FLYER_KINDS key | "none"
+	-- colorFlight / colorRecord ({ r, g, b }) are only saved once picked: nil = Bar.lua's default
 	-- (bar.flyerStyle from v0.2.0-beta.1 is no longer used; old saves keep it, unread)
 }
+
+-- ranges for the Options panel and InitDB checks: { min, max, step }
+local LIMITS = { width = { 160, 500, 10 }, scale = { 0.7, 1.6, 0.05 } }
+TT.limits = LIMITS
+TT.FLYER_KINDS = FLYER_KINDS
 
 ------------------------------------------------------------------------
 -- State
@@ -99,10 +107,11 @@ function TT.ShortName(name)
 	return (name:match("^([^,]+)")) or name
 end
 
--- "12m", "3h 12m", "123h" from seconds (flight time totals)
+-- "45s", "12m", "3h 12m", "123h" from seconds (flight time totals)
 function TT.FormatLong(sec)
 	sec = math.floor(sec or 0)
 	if sec < 0 then sec = 0 end
+	if sec < 60 then return string.format("%ds", sec) end
 	local h = math.floor(sec / 3600)
 	local m = math.floor((sec % 3600) / 60)
 	if h == 0 then return string.format("%dm", m) end
@@ -198,6 +207,9 @@ end
 function TT.FlyerFor(spot, nodeID, npcID, mapID)
 	local own = spot ~= nil and TT.db and TT.db.flyers and TT.db.flyers[spot]
 	if own and FLYER_KINDS[own] then return own end
+	-- Options panel: one creature everywhere (a flight master's own choice above still wins)
+	local all = TT.db and TT.db.bar and TT.db.bar.flyer
+	if all and FLYER_KINDS[all] then return all end
 	if nodeID and NODE_FLYER[nodeID] then return NODE_FLYER[nodeID] end
 	if npcID and NPC_FLYER[npcID] then return NPC_FLYER[npcID] end
 	local faction = UnitFactionGroup and UnitFactionGroup("player")
@@ -237,7 +249,19 @@ local function InitDB()
 	for k, v in pairs(DEFAULTS_BAR) do
 		if db.bar[k] == nil then db.bar[k] = v end
 	end
-	if db.tooltip == nil then db.tooltip = true end -- flight-map tooltip line
+	-- wrong types or out-of-range numbers (hand-edited saves) go back to a usable value
+	local bar = db.bar
+	for k, lim in pairs(LIMITS) do
+		local v = bar[k]
+		if type(v) ~= "number" or v ~= v then bar[k] = DEFAULTS_BAR[k]
+		elseif v < lim[1] then bar[k] = lim[1]
+		elseif v > lim[2] then bar[k] = lim[2] end
+	end
+	for _, k in ipairs({ "locked", "showTotals" }) do
+		if type(bar[k]) ~= "boolean" then bar[k] = DEFAULTS_BAR[k] end
+	end
+	if not (bar.flyer == "auto" or bar.flyer == "none" or FLYER_KINDS[bar.flyer]) then bar.flyer = "auto" end
+	if type(db.tooltip) ~= "boolean" then db.tooltip = true end -- flight-map tooltip line
 	if type(db.flyers) ~= "table" then db.flyers = {} end -- /tt flyer choices: start point -> kind
 	if type(TaxiTimeCharDB) ~= "table" then TaxiTimeCharDB = {} end
 	db.totals = FillTotals(db.totals)                         -- all characters
@@ -750,6 +774,7 @@ function handlers.ADDON_LOADED(name)
 	InitDB()
 	TT.Bar:Create()
 	TT.Tooltip:Init()
+	if TT.InitOptions then TT.InitOptions() end -- Options.lua: Blizzard Settings panel
 
 	hooksecurefunc("TakeTaxiNode", OnTakeTaxiNode)
 	if TaxiRequestEarlyLanding then
@@ -831,6 +856,7 @@ end)
 
 local function Help()
 	Print("commands:")
+	Print("  /tt options - open the options panel (bar size, colours, creature, lock)")
 	Print("  /tt lock | unlock - lock the bar / unlock it to drag it")
 	Print("  /tt reset - put the bar back in its default place")
 	Print("  /tt test - show or hide a test bar (/tt test bat: with a bat)")
@@ -969,11 +995,21 @@ local function FlyerCommand(rest)
 		return
 	end
 	if flight and flight.flyerSpot == spot then
-		-- running flight from that start point: change the icon now
-		flight.flyer = TT.FlyerFor(spot, flight.fromNode, flight.npcID, flight.startMap)
+		TT.RefreshFlyer() -- running flight from that start point: change the icon now
+	end
+end
+
+-- picks the running flight's creature again (after /tt flyer or the Options
+-- panel's creature setting); no flight: the test bar follows the setting
+function TT.RefreshFlyer()
+	if flight then
+		flight.flyer = TT.FlyerFor(flight.flyerSpot, flight.fromNode, flight.npcID, flight.startMap)
 		if TaxiTimeCharDB.active then TaxiTimeCharDB.active.flyer = flight.flyer end
 		TT.Bar:SetFlyer(flight.flyer)
+	else
+		TT.Bar:RefreshTestFlyer()
 	end
+	TT.Bar:RefreshFlyerShown() -- "none" hides it
 end
 
 SLASH_TAXITIME1 = "/tt"
@@ -982,11 +1018,13 @@ SlashCmdList.TAXITIME = function(msg)
 	-- lower case, extra spaces collapsed: "totals  on" = "totals on"
 	local cmd = strtrim((msg or "")):lower():gsub("%s+", " ")
 	local word, rest = cmd:match("^(%S*) ?(.*)$")
-	if cmd == "lock" then
-		TT.Bar:SetLocked(true)
+	if cmd == "options" or cmd == "config" then
+		TT.OpenOptions()
+	elseif cmd == "lock" then
+		TT.SetOption("locked", true)
 		Print("bar locked.")
 	elseif cmd == "unlock" then
-		TT.Bar:SetLocked(false)
+		TT.SetOption("locked", false)
 		Print("bar unlocked - drag it, then /tt lock.")
 	elseif cmd == "reset" then
 		TT.Bar:ResetPosition()
@@ -1012,7 +1050,7 @@ SlashCmdList.TAXITIME = function(msg)
 			Print("no route to forget (fly one first).")
 		end
 	elseif cmd == "tooltip" then
-		TT.db.tooltip = not TT.db.tooltip
+		TT.SetOption("tooltip", not TT.db.tooltip)
 		Print("flight-map times " .. (TT.db.tooltip and "on." or "off."))
 	elseif word == "totals" then
 		if rest == "" then
@@ -1020,8 +1058,7 @@ SlashCmdList.TAXITIME = function(msg)
 			PrintTotals("All characters", TT.accTotals)
 		elseif rest == "on" or rest == "off" then
 			local show = (rest == "on")
-			TT.db.bar.showTotals = show
-			TT.Bar:SetShowTotals(show)
+			TT.SetOption("showTotals", show)
 			Print("totals under the bar " .. (show and "on." or "off."))
 		else
 			Print("use /tt totals, /tt totals on or /tt totals off.")

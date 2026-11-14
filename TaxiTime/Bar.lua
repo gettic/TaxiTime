@@ -41,9 +41,13 @@ local CLOUD_ALPHA = 0.85
 local SPARKLE_STEP = 0.12        -- seconds per sparkle frame
 local SPARKLE_TIME = 1.0         -- sparkle shown for this long
 local FLYER_KEEP = 0.5           -- flyer stays this long after a real landing
-local COLOR_FLIGHT = { 0.25, 0.6, 1.0 }
-local COLOR_RECORD = { 1.0, 0.5, 0.1 }
-local COLOR_DONE = { 0.2, 0.8, 0.3 }
+-- Fill colours in one place. colorFlight / colorRecord can be changed in the
+-- Options panel (saved in TaxiTimeDB.bar only once picked; nil = this default).
+local COLORS = {
+	colorFlight = { 0.25, 0.6, 1.0 },
+	colorRecord = { 1.0, 0.5, 0.1 },
+	done        = { 0.2, 0.8, 0.3 },  -- "Recorded" flash, fixed
+}
 
 local frame, status, iconFrame, icon, leftText, rightText
 local totalsText      -- "Spent ... | Flown ..." line under the bar
@@ -55,7 +59,9 @@ local maskOn = false
 local iconIsSheet = false -- true: custom flap sheet, false: Blizzard icon
 local iconSize = ICON_SIZE
 local flyerKind       -- kind shown now (after fallbacks)
-local flyerVisible = false -- the flyer should be on screen
+local flyerVisible = false -- the flyer is on screen
+local flyerWanted = false  -- the mode wants a flyer (hidden anyway if the creature option is "none")
+local colorKey        -- COLORS key in use now (ApplyColors repaints it)
 local flapIndex       -- frame of the flyer sheet shown now
 local iconX = 0       -- flyer centre x from the bar's left edge
 local landTime        -- GetTime() of a real landing (sparkle), or nil
@@ -88,8 +94,24 @@ end
 -- Look per mode
 ------------------------------------------------------------------------
 
-local function SetColor(c)
-	status:SetStatusBarColor(c[1], c[2], c[3])
+-- saved colour if it is a usable { r, g, b } (0..1), else the default
+local function ColorOf(key)
+	local c = TT.db and TT.db.bar and TT.db.bar[key]
+	if type(c) == "table" then
+		local ok = true
+		for i = 1, 3 do
+			local v = c[i]
+			if type(v) ~= "number" or v ~= v or v < 0 or v > 1 then ok = false end
+		end
+		if ok then return c[1], c[2], c[3] end
+	end
+	local d = COLORS[key]
+	return d[1], d[2], d[3]
+end
+
+local function SetColor(key)
+	colorKey = key
+	status:SetStatusBarColor(ColorOf(key))
 end
 
 local function SetFlap(now)
@@ -106,7 +128,8 @@ end
 ------------------------------------------------------------------------
 
 local function ShowFlyer(show)
-	flyerVisible = show and true or false
+	flyerWanted = show and true or false
+	flyerVisible = flyerWanted and TT.db.bar.flyer ~= "none"
 	if flyerVisible then iconFrame:Show() else iconFrame:Hide() end
 end
 
@@ -269,6 +292,7 @@ function Bar:Create()
 		frame:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 	end
 	frame:SetSize((b.width or 260) + 8, HEIGHT)
+	frame:SetScale(b.scale or 1)
 	frame:SetFrameStrata("MEDIUM")
 	frame:SetClampedToScreen(true)
 
@@ -439,7 +463,7 @@ function Bar:StartFlight(fromName, toName, recorded, elapsed, isEstimate)
 	total = (recorded and recorded > 0) and recorded or 1
 	Begin("flight", fromName, toName, elapsed)
 	estimate = isEstimate and "~" or ""
-	SetColor(COLOR_FLIGHT)
+	SetColor("colorFlight")
 	status:SetMinMaxValues(0, total)
 	status:SetValue(0)
 	ShowFlyer(true)
@@ -449,7 +473,7 @@ end
 -- First flight of a route: full pulsing bar that counts up
 function Bar:StartRecording(fromName, toName, elapsed)
 	Begin("record", fromName, toName, elapsed)
-	SetColor(COLOR_RECORD)
+	SetColor("colorRecord")
 	status:SetMinMaxValues(0, 1)
 	status:SetValue(1)
 	ShowFlyer(true)
@@ -480,7 +504,7 @@ function Bar:Finish(recordedDur, landed)
 		ShowFlyer(false)
 	end
 	if recordedDur then
-		SetColor(COLOR_DONE)
+		SetColor("done")
 		status:SetMinMaxValues(0, 1)
 		status:SetValue(1)
 		leftText:SetText("Recorded")
@@ -496,12 +520,18 @@ function Bar:Finish(recordedDur, landed)
 end
 
 -- Test bar (also shown while unlocked, so there is something to drag)
+-- the Options panel's creature if it is one fixed kind, else nil (automatic)
+local function OptionFlyer()
+	local k = TT.db.bar.flyer
+	return FLYER_ART[k] and k or nil
+end
+
 function Bar:ShowTest(kind)
 	if mode == "flight" or mode == "record" then return end
-	Bar:SetFlyer(kind) -- nil: the faction's creature
+	Bar:SetFlyer(kind or OptionFlyer()) -- nil: the faction's creature
 	total = 20
 	Begin("test", "Stormwind, Elwynn", "Sentinel Hill, Westfall", 0)
-	SetColor(COLOR_FLIGHT)
+	SetColor("colorFlight")
 	status:SetMinMaxValues(0, total)
 	ShowFlyer(true)
 	ShowCloud(true)
@@ -513,6 +543,10 @@ function Bar:HideTest()
 		ShowFlyer(false)
 		frame:Hide()
 	end
+end
+
+function Bar:IsTestShown()
+	return mode == "test"
 end
 
 function Bar:ToggleTest()
@@ -534,6 +568,50 @@ end
 function Bar:SetShowTotals(show)
 	if not totalsText then return end
 	if show then UpdateTotals() else totalsText:Hide() end
+end
+
+------------------------------------------------------------------------
+-- Options panel (called through TT.SetOption in Options.lua)
+------------------------------------------------------------------------
+
+-- colour now in use for a setting key (for the colour picker's start value)
+function Bar:GetColor(key)
+	return ColorOf(key)
+end
+
+-- repaint after a colour change (a running bar changes at once)
+function Bar:ApplyColors()
+	if status and colorKey then SetColor(colorKey) end
+end
+
+-- TaxiTimeDB.bar.width
+function Bar:ApplySize()
+	if frame then frame:SetSize(TT.db.bar.width + 8, HEIGHT) end
+end
+
+-- TaxiTimeDB.bar.scale. The saved offsets are in the bar's own (scaled)
+-- units, so they are rescaled to keep the bar's anchor point where it is.
+function Bar:ApplyScale()
+	if not frame then return end
+	local new = TT.db.bar.scale
+	local old = frame:GetScale() or 1
+	if old > 0 and new > 0 and old ~= new then
+		local b = TT.db.bar
+		b.x = math.floor((b.x or 0) * old / new * 10 + 0.5) / 10
+		b.y = math.floor((b.y or -160) * old / new * 10 + 0.5) / 10
+	end
+	frame:SetScale(new)
+	ApplyPosition()
+end
+
+-- creature option changed: the test bar shows the new choice
+function Bar:RefreshTestFlyer()
+	if mode == "test" then Bar:SetFlyer(OptionFlyer()) end
+end
+
+-- creature option "none" hides the flyer (the sparkle and cloud stay)
+function Bar:RefreshFlyerShown()
+	if iconFrame then ShowFlyer(flyerWanted) end
 end
 
 function Bar:ResetPosition()
