@@ -32,6 +32,11 @@ local FLYER_ART = {
 	hippogryph = { sheet = MEDIA .. "flyer_hippogryph", ready = true, icon = "Interface\\Icons\\Ability_Mount_WarHippogryph" },
 }
 local FACTION_FLYER = { Alliance = "gryphon", Horde = "wyvern" } -- unknown creature: as before
+-- Kiwi mode (secret, /tt kiwi; TaxiTimeDB.kiwi): Kiwi, a Senegal parrot, is drawn
+-- instead of every creature. A look only: the real kind stays picked and saved.
+-- Same sheet format as above. No Blizzard icon: without the sheet the real
+-- creature is shown (and /tt kiwi says she isn't here yet).
+local KIWI_ART = { sheet = MEDIA .. "flyer_kiwi", ready = true }
 
 local FLAP_FPS = 10              -- wing-flap frames per second
 local HALF_TEXEL = 0.5 / 512     -- keeps a frame from bleeding into its neighbour (512 px sheets)
@@ -78,6 +83,7 @@ local maskOn = false
 local iconIsSheet = false -- true: custom flap sheet, false: Blizzard icon
 local iconSize = ICON_SIZE
 local flyerKind       -- kind shown now (after fallbacks)
+local kiwiShown = false -- Kiwi mode's sheet is drawn instead of flyerKind
 local flyerVisible = false -- the flyer is on screen
 local flyerWanted = false  -- the mode wants a flyer (hidden anyway if the creature option is "none")
 local colorKey        -- COLORS key in use now (ApplyColors repaints it)
@@ -148,7 +154,7 @@ end
 
 local function ShowFlyer(show)
 	flyerWanted = show and true or false
-	flyerVisible = flyerWanted and TT.db.bar.flyer ~= "none"
+	flyerVisible = flyerWanted and (TT.db.bar.flyer ~= "none" or kiwiShown) -- Kiwi beats "none"
 	if flyerVisible then iconFrame:Show() else iconFrame:Hide() end
 end
 
@@ -502,6 +508,8 @@ function Bar:SetFlyer(kind)
 		art = FLYER_ART[kind]
 	end
 	flyerKind = kind
+	kiwiShown = (TT.db and TT.db.kiwi == true and Bar:KiwiReady()) and true or false
+	if kiwiShown then art = KIWI_ART end -- the look only; flyerKind stays the real one
 	local useSheet = USE_CUSTOM_ART and art.ready and true or false
 	iconIsSheet = useSheet
 	iconSize = useSheet and SHEET_SIZE or ICON_SIZE
@@ -721,6 +729,23 @@ end
 -- creature option "none" hides the flyer (the sparkle and cloud stay)
 function Bar:RefreshFlyerShown()
 	if iconFrame then ShowFlyer(flyerWanted) end
+end
+
+-- Kiwi mode can be shown: custom art on and her sheet is in media\
+function Bar:KiwiReady()
+	return USE_CUSTOM_ART and KIWI_ART.ready and true or false
+end
+
+-- Kiwi drawn on the bar right now (tests, /tt kiwi)
+function Bar:IsKiwiShown()
+	return kiwiShown
+end
+
+-- /tt kiwi switched: redraw the creature on the bar now (same real kind)
+function Bar:RefreshKiwi()
+	if not iconFrame then return end
+	if flyerKind or kiwiShown then Bar:SetFlyer(flyerKind) end
+	ShowFlyer(flyerWanted)
 end
 
 function Bar:ResetPosition()

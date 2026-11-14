@@ -4,7 +4,7 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.1-beta.3. Please report any problems you find.
+Version 0.2.1-beta.4. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
@@ -12,6 +12,7 @@ Version 0.2.1-beta.3. Please report any problems you find.
 - [Flight-map tooltips](#flight-map-tooltips)
 - [Flight totals](#flight-totals)
 - [Flight rank](#flight-rank)
+- [Milestones](#milestones)
 - [Options panel](#options-panel)
 - [Starter times and export](#starter-times-and-export)
 - [Slash commands](#slash-commands)
@@ -91,6 +92,20 @@ Every character earns a Taxi Time rank from 1 to 30, each with a funny title ("G
 
 `/tt rank` prints the rank and progress to the next one, for this character and for all your characters together.
 
+## Milestones
+
+There are 17 small goals from your flying. They are Taxi Time's own, not game achievements.
+
+| Kind | Examples |
+|---|---|
+| Per character | 1, 10, 100 or 500 flights; 1, 10 or 24 hours in the air; 1, 10 or 100 gold spent |
+| All characters | 10, 25 or 50 different routes; one route flown 10 or 25 times; a route of 8 minutes or more; all 4 creatures |
+
+- **Creatures:** only creatures the addon picked by itself count, not ones you chose. You need both factions to get all 4.
+- **Chat line:** when you reach one, the chat says so. Flights from before this version count: after the update you get one summary line.
+- **The list:** `/tt milestones` (or `/tt ms`) opens a window with all milestones and your progress. Point at one for details. Run it again to close it.
+- **Switch the chat line:** `/tt milestones off` or `/tt milestones on`, or the options checkbox. Milestones are still counted when it is off.
+
 ## Options panel
 
 Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options > AddOns > Taxi Time.
@@ -111,6 +126,8 @@ Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options
 | Play a sound when you land | A short Blizzard ping after a clean landing. Follows the game's Sound Effects volume. |
 | Sparkle when you land | Shows or hides the small sparkle after a clean landing. |
 | Show times on the flight map | Shows or hides the times in the map tooltips. |
+| Announce milestones in chat | A chat line when you reach a milestone. |
+| Milestones (Show) | Opens the milestones list. |
 
 Colours use the game's own colour picker. Cancel in the picker puts the old colour back.
 
@@ -142,6 +159,7 @@ Type `/tt` or `/taxitime`, followed by:
 | `tooltip` | Turns the times on the flight map on or off. |
 | `totals` | Prints gold spent and time flown. `totals on` / `totals off` shows or hides the line under the bar. |
 | `rank` | Prints your Taxi Time rank and progress. `rank on` / `rank off` shows or hides it under the bar. |
+| `milestones` (or `ms`) | Opens or closes the milestones list. `milestones on` / `milestones off` sets the chat line for a new milestone. |
 | `sound` | Turns the landing sound on or off. `sound on` / `sound off` sets it. |
 | `export` | Opens a window with your saved times to copy. |
 
@@ -174,6 +192,7 @@ The addon's own pictures (the bar frame, fill, pixel-art flyers, cloud and spark
 | `TaxiTime/StarterTimes.lua` | The starter times list (empty in this version). |
 | `TaxiTime/Core.lua` | Finds take-off and landing, saves route times, counts totals, the `/tt` command and export window. |
 | `TaxiTime/Rank.lua` | The Taxi Time rank: XP from the saved totals, titles, rank-up message, `/tt rank`. |
+| `TaxiTime/Milestones.lua` | The milestones: goals, progress, chat line and the list window. |
 | `TaxiTime/Options.lua` | The options panel in the game's Settings window, and the one place settings are changed (`TT.SetOption`). |
 | `TaxiTime/Bar.lua` | The bar, the flying creature (pixel art), cloud, sparkle and the totals and rank line. |
 | `TaxiTime/Tooltip.lua` | The time line in the flight-map tooltips. |
@@ -185,7 +204,7 @@ Saved data:
 
 | Saved variable | Holds |
 |---|---|
-| `TaxiTimeDB` (account) | Route times, the bar's position, size, colours and creature choice, the tooltip, totals and rank settings, your creature choices per flight master, and all characters' totals. |
-| `TaxiTimeCharDB` (per character) | This character's totals, the last rank announced, and the flight in progress, so it can be shown again after a login. |
+| `TaxiTimeDB` (account) | Route times, the bar's position, size, colours and creature choice, the tooltip, totals, rank and milestone chat settings, your creature choices per flight master, all characters' totals, the creatures flown, and when each all-character milestone was reached. |
+| `TaxiTimeCharDB` (per character) | This character's totals, the last rank announced, when each of its milestones was reached, and the flight in progress, so it can be shown again after a login. |
 
 The settings for recording (minimum flight time, the 80% rule, landing distance) are constants at the top of `Core.lua`. Setting `USE_CUSTOM_ART = false` at the top of `Bar.lua` switches to a plain look with the game's own icons, for example if the picture files don't load.

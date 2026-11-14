@@ -30,6 +30,7 @@ local OPTIONS = {
 	tooltip    = { tbl = "db", kind = "boolean" }, -- read on each flight-map hover
 	landSound  = { tbl = "db", kind = "boolean", apply = function(v) if v then TT.Bar:PlayLandSound() end end }, -- on = preview once
 	landSparkle = { tbl = "bar", kind = "boolean" }, -- read at each landing
+	milestoneChat = { tbl = "db", kind = "boolean" }, -- read when a milestone is reached
 	colorFlight = { tbl = "bar", kind = "color", apply = function() TT.Bar:ApplyColors() end },
 	colorRecord = { tbl = "bar", kind = "color", apply = function() TT.Bar:ApplyColors() end },
 }
@@ -231,6 +232,13 @@ local function Build()
 
 	Header("Flight map")
 	Checkbox("tooltip", "Show times on the flight map", true, "Adds the flight time to the flight map's tooltips.")
+
+	Header("Milestones")
+	Checkbox("milestoneChat", "Announce milestones in chat", true,
+		"A chat line when you reach a Taxi Time milestone. They are still counted when this is off.")
+	Button("Milestones", "Show", function()
+		if TT.ShowMilestones then TT.ShowMilestones() end
+	end, "Your Taxi Time milestones: reached ones and how far you are with the rest. Also /tt milestones.")
 
 	S.RegisterAddOnCategory(cat)
 	return cat

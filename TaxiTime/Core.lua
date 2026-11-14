@@ -206,18 +206,19 @@ local function FlyerSpot(nodeID, npcID)
 	return nil
 end
 
--- kind of creature ("gryphon", "wyvern", "bat", "hippogryph") or nil = faction icon
+-- kind of creature ("gryphon", "wyvern", "bat", "hippogryph") or nil = faction icon;
+-- second value: "own" = the player's choice (/tt flyer or Options), "auto" = picked by the addon
 function TT.FlyerFor(spot, nodeID, npcID, mapID)
 	local own = spot ~= nil and TT.db and TT.db.flyers and TT.db.flyers[spot]
-	if own and FLYER_KINDS[own] then return own end
+	if own and FLYER_KINDS[own] then return own, "own" end
 	-- Options panel: one creature everywhere (a flight master's own choice above still wins)
 	local all = TT.db and TT.db.bar and TT.db.bar.flyer
-	if all and FLYER_KINDS[all] then return all end
-	if nodeID and NODE_FLYER[nodeID] then return NODE_FLYER[nodeID] end
-	if npcID and NPC_FLYER[npcID] then return NPC_FLYER[npcID] end
+	if all and FLYER_KINDS[all] then return all, "own" end
+	if nodeID and NODE_FLYER[nodeID] then return NODE_FLYER[nodeID], "auto" end
+	if npcID and NPC_FLYER[npcID] then return NPC_FLYER[npcID], "auto" end
 	local faction = UnitFactionGroup and UnitFactionGroup("player")
-	if faction == "Alliance" and InKalimdor(mapID) then return "hippogryph" end
-	return nil
+	if faction == "Alliance" and InKalimdor(mapID) then return "hippogryph", "auto" end
+	return nil, "auto"
 end
 
 -- the only recorded "zone:" route from this start map, or nil (none or several)
@@ -267,6 +268,8 @@ local function InitDB()
 	if type(db.tooltip) ~= "boolean" then db.tooltip = true end -- flight-map tooltip line
 	if type(db.landSound) ~= "boolean" then db.landSound = true end -- sound on a clean landing
 	if type(db.flyers) ~= "table" then db.flyers = {} end -- /tt flyer choices: start point -> kind
+	if type(db.milestoneChat) ~= "boolean" then db.milestoneChat = true end -- chat line for a new milestone
+	if type(db.kiwi) ~= "boolean" then db.kiwi = false end
 	if type(TaxiTimeCharDB) ~= "table" then TaxiTimeCharDB = {} end
 	db.totals = FillTotals(db.totals)                         -- all characters
 	TaxiTimeCharDB.totals = FillTotals(TaxiTimeCharDB.totals) -- this character
@@ -275,6 +278,7 @@ local function InitDB()
 	TT.db = db
 	TT.defaultsBar = DEFAULTS_BAR
 	if TT.RankInit then TT.RankInit() end -- rankShown for old saves (Rank.lua)
+	if TT.MilestoneInit then TT.MilestoneInit() end -- milestone tables (Milestones.lua)
 end
 
 ------------------------------------------------------------------------
@@ -507,7 +511,10 @@ local function BeginFlight(info, elapsed)
 		flight.flyer = FLYER_KINDS[info.flyer] and info.flyer or nil
 	else
 		flight.startMap = PlayerMapID()
-		flight.flyer = TT.FlyerFor(flight.flyerSpot, info.fromNode, info.npcID, flight.startMap)
+		local how
+		flight.flyer, how = TT.FlyerFor(flight.flyerSpot, info.fromNode, info.npcID, flight.startMap)
+		-- milestone "Whole Flock": only creatures the addon picked by itself count
+		if how == "auto" and TT.NoteFlownKind then TT.NoteFlownKind(flight.flyer) end
 	end
 	if flight.flyerSpot ~= nil then flyerSpot, flyerSpotName = flight.flyerSpot, flight.flyerName end
 	pending = nil
@@ -685,6 +692,7 @@ local function EndFlight()
 	local hadFlight = flight ~= nil
 	FinishFlight()
 	if hadFlight and TT.CheckRankUp then TT.CheckRankUp() end
+	if hadFlight and TT.CheckMilestones then TT.CheckMilestones() end -- after the rank line
 end
 
 CheckTaxi = function()
@@ -880,6 +888,7 @@ function handlers.PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
 	C_Timer.After(1, function()
 		loading = false
 		if TT.RankStartNote then TT.RankStartNote() end -- once: "you start at Rank N"
+		if TT.MilestoneStartNote then TT.MilestoneStartNote() end -- once: "you already have N milestones"
 		if state ~= "idle" then
 			CheckTaxi()
 		elseif (isInitialLogin or isReloadingUi) and TaxiTimeCharDB.active then
@@ -915,6 +924,7 @@ local function Help()
 	Print("  /tt totals - gold spent and time flown; /tt totals on | off - line under the bar")
 	Print("  /tt sound [on | off] - sound when you land")
 	Print("  /tt rank - your Taxi Time rank from flying; /tt rank on | off - rank under the bar")
+	Print("  /tt milestones - your Taxi Time milestones; /tt milestones on | off - chat line for a new one")
 	Print("  /tt export - your recorded times as text to copy (for the starter list)")
 end
 
@@ -1063,6 +1073,25 @@ function TT.RefreshFlyer()
 	TT.Bar:RefreshFlyerShown() -- "none" hides it
 end
 
+-- /tt kiwi [on|off]: the secret Kiwi mode (Kiwi, a Senegal parrot, flies every
+-- flight while it's on). Account-wide TaxiTimeDB.kiwi. Only the look changes
+-- (Bar.lua): the real creature is still picked, saved and counted.
+local function KiwiCommand(rest)
+	local on
+	if rest == "on" then on = true elseif rest == "off" then on = false else on = not TT.db.kiwi end
+	if on and not TT.Bar:KiwiReady() then
+		Print("Kiwi isn't here yet.")
+		return
+	end
+	TT.db.kiwi = on
+	TT.Bar:RefreshKiwi()
+	if on then
+		Print("Kiwi mode on. Kiwi flies you everywhere now. Squawk!")
+	else
+		Print("Kiwi mode off. Back to the usual creatures.")
+	end
+end
+
 SLASH_TAXITIME1 = "/tt"
 SLASH_TAXITIME2 = "/taxitime"
 SlashCmdList.TAXITIME = function(msg)
@@ -1133,6 +1162,17 @@ SlashCmdList.TAXITIME = function(msg)
 		else
 			Print("use /tt rank, /tt rank on or /tt rank off.")
 		end
+	elseif (word == "milestones" or word == "ms") and TT.ShowMilestones then
+		if rest == "" then
+			TT.ShowMilestones()
+		elseif rest == "on" or rest == "off" then
+			TT.SetOption("milestoneChat", rest == "on")
+			Print("milestone chat lines " .. (rest == "on" and "on." or "off."))
+		else
+			Print("use /tt milestones, /tt milestones on or /tt milestones off.")
+		end
+	elseif word == "kiwi" and (rest == "" or rest == "on" or rest == "off") then
+		KiwiCommand(rest) -- secret: not in the help or the Options panel
 	elseif cmd == "export" then
 		ShowExport()
 	else
