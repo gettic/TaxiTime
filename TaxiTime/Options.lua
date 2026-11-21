@@ -1,19 +1,33 @@
 -- Taxi Time: Options.lua
 -- The options panel in Blizzard's own Settings window (Options > AddOns >
--- Taxi Time), built only from Blizzard's controls, and TT.SetOption: the one
--- path the panel and the slash commands use to change a setting.
+-- Taxi Time), and TT.SetOption: the one path the panel and the slash
+-- commands use to change a setting.
 --
--- API checked against Blizzard's UI source (github.com/Gethe/wow-ui-source,
--- Blizzard_Settings_Shared/Blizzard_Settings.lua, Blizzard_SettingControls.lua)
--- and warcraft.wiki.gg "Settings API" / "Using the ColorPickerFrame".
--- Interface 16001 (WoW Forever) runs the modern client; every call is still
--- checked, so a missing one only loses the panel, never the addon.
+-- The panel is a CANVAS: our own frame, built from Blizzard's templates, that
+-- the Settings window only parents to its canvas and calls OnRefresh /
+-- OnDefault on (through securecallfunction). It does NOT use Blizzard's
+-- vertical settings list: that list reuses the same row frames for every
+-- category, and rows filled by an addon were later reused for Blizzard's
+-- Social > Discord button, whose Init calls the restricted
+-- C_Discord.IsUserOAuthed() -> "ADDON_ACTION_FORBIDDEN" while scrolling.
+--
+-- API checked against Blizzard's UI source for WoW Forever 1.60.1 (wow-ui-source
+-- branch "forever": Blizzard_Settings_Shared/Blizzard_Settings.lua
+-- RegisterCanvasLayoutCategory, Blizzard_SettingsPanel.lua DisplayLayout /
+-- CallDefaultOnCanvases, Blizzard_SharedXML/Shared/Slider/MinimalSlider.lua,
+-- Blizzard_Menu/MenuUtil.lua) and warcraft.wiki.gg "Settings API" /
+-- "Using the ColorPickerFrame". Every call is checked or has a fallback, so a
+-- missing one only loses (part of) the panel, never the addon.
 
 local ADDON, TT = ...
 
 local category          -- our Settings category (nil = no panel on this client)
-local settings = {}     -- option key -> Blizzard setting object (keeps the panel in sync)
-local syncing = false   -- true while we push a slash-command change into the panel
+local refreshing = false -- true while we put a saved value into a control (no feedback loop)
+
+-- the panel's parts; TT.OptionsUI is also read by the offline tests
+-- controls: option key -> { kind, name, default, widget, Set(value) }
+local ui = { controls = {}, buttons = {}, headers = {}, y = 0 }
+TT.OptionsUI = ui
 
 ------------------------------------------------------------------------
 -- Options: where each one is saved and what applies it live
@@ -63,6 +77,23 @@ local function Clean(key, value)
 	return nil
 end
 
+-- the saved value of an option
+local function Saved(key)
+	local o = OPTIONS[key]
+	if not (o and TT.db) then return nil end
+	local tbl = o.tbl == "db" and TT.db or TT.db.bar
+	return tbl and tbl[key]
+end
+
+-- puts a value into the option's control (if the panel has one)
+local function ShowValue(key, value)
+	local c = ui.controls[key]
+	if not (c and c.Set) or refreshing then return end
+	refreshing = true
+	pcall(c.Set, value)
+	refreshing = false
+end
+
 -- Saves an option, applies it at once and shows it in the panel.
 -- Colours: value nil = back to the default. Returns true if it was taken.
 function TT.SetOption(key, value)
@@ -71,17 +102,32 @@ function TT.SetOption(key, value)
 	local clean = Clean(key, value)
 	if clean == nil and o.kind ~= "color" then return false end
 	local tbl = o.tbl == "db" and TT.db or TT.db.bar
-	-- push to the panel BEFORE writing the table: the Blizzard setting reads
-	-- this same table and only tells its checkbox/slider when the value differs
-	local s = settings[key]
-	if s and not syncing and s.SetValue then
-		syncing = true
-		pcall(s.SetValue, s, clean)
-		syncing = false
-	end
 	tbl[key] = clean
 	if o.apply then o.apply(clean) end
+	ShowValue(key, clean) -- also when the panel is open (slash commands, rounding)
 	return true
+end
+
+-- a control was changed by the user: save it, or show the saved value again if refused
+local function UserSet(key, value)
+	if refreshing then return end
+	if not TT.SetOption(key, value) then ShowValue(key, Saved(key)) end
+end
+
+-- every control shows its saved value (panel shown, Settings window refresh)
+local function RefreshAll()
+	if not TT.db then return end
+	for key in pairs(ui.controls) do ShowValue(key, Saved(key)) end
+end
+
+-- Blizzard's "Defaults" (this page or all settings) and our Defaults button:
+-- the options of the controls back to their defaults (colours and recorded
+-- flights are not touched, as before). Only changed ones, so nothing replays.
+local function ResetToDefaults()
+	if not TT.db then return end
+	for key, c in pairs(ui.controls) do
+		if Saved(key) ~= c.default then TT.SetOption(key, c.default) end
+	end
 end
 
 ------------------------------------------------------------------------
@@ -127,7 +173,7 @@ local function PickColor(key)
 end
 
 ------------------------------------------------------------------------
--- The panel
+-- The panel (canvas): Blizzard's look, our own frames
 ------------------------------------------------------------------------
 
 local FLYER_LABELS = {
@@ -139,54 +185,278 @@ local FLYER_LABELS = {
 	{ "none", "None (no creature)" },
 }
 
+-- every art choice of the panel in one place (Blizzard's names, none copied);
+-- the same sizes and fonts as Blizzard's own settings list
+local ART = {
+	title = "GameFontHighlightHuge",       -- page title (SettingsListTemplate Header)
+	header = "GameFontHighlightLarge",     -- section header (SettingsListSectionHeaderTemplate)
+	label = "GameFontNormal",              -- control label
+	divider = "Options_HorizontalDivider", -- line under the title
+	checkbox = { "MinimalCheckboxTemplate", "UICheckButtonTemplate" },
+	slider = "MinimalSliderWithSteppersTemplate",
+	button = "UIPanelButtonTemplate",
+	dropdown = "WowStyle1DropdownTemplate",
+	scroll = "ScrollFrameTemplate",
+	rowHeight = 26, headerHeight = 45, labelX = 37, controlX = -80, -- controlX: from the row's centre
+}
+
+-- a frame from a Blizzard template, or nil if this client hasn't got it
+local function Try(kind, parent, template)
+	local ok, f = pcall(CreateFrame, kind, nil, parent, template)
+	if ok and f then return f end
+	return nil
+end
+
+local function PlayClick(on)
+	if PlaySound and SOUNDKIT then
+		local id = on and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF
+		if id then PlaySound(id) end
+	end
+end
+
+-- tooltip like Blizzard's settings: the name in white, the help text below
+local function TipEnter(self)
+	local row = self.ttRow or self
+	if not (GameTooltip and row.ttName) then return end
+	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+	GameTooltip:SetText(row.ttName, 1, 1, 1)
+	if row.ttText then
+		local n = NORMAL_FONT_COLOR
+		GameTooltip:AddLine(row.ttText, n and n.r or 1, n and n.g or 0.82, n and n.b or 0, true)
+	end
+	GameTooltip:Show()
+end
+local function TipLeave()
+	if GameTooltip then GameTooltip:Hide() end
+end
+local function AddTip(region, row)
+	if not (region and region.HookScript) then return end
+	region.ttRow = row
+	region:HookScript("OnEnter", TipEnter)
+	region:HookScript("OnLeave", TipLeave)
+end
+
+-- one line of the page, under the one before
+local function NewRow(height, name, tooltip)
+	local row = CreateFrame("Frame", nil, ui.content)
+	row:SetHeight(height)
+	row:SetPoint("TOPLEFT", ui.content, "TOPLEFT", 0, -ui.y)
+	row:SetPoint("RIGHT", ui.content, "RIGHT", 0, 0)
+	ui.y = ui.y + height
+	if name then
+		local fs = row:CreateFontString(nil, "ARTWORK", ART.label)
+		fs:SetPoint("LEFT", row, "LEFT", ART.labelX, 0)
+		fs:SetPoint("RIGHT", row, "CENTER", ART.controlX - 8, 0)
+		fs:SetJustifyH("LEFT")
+		if fs.SetWordWrap then fs:SetWordWrap(false) end
+		fs:SetText(name)
+		row.label = fs
+		row.ttName, row.ttText = name, tooltip
+		row:EnableMouse(true) -- tooltip over the label too
+		AddTip(row, row)
+	end
+	return row
+end
+
+local function PlaceControl(widget, row)
+	widget:SetPoint("LEFT", row, "CENTER", ART.controlX, 0)
+	AddTip(widget, row)
+end
+
+local function AddControl(key, kind, name, default, widget, Set)
+	ui.controls[key] = { kind = kind, name = name, default = default, widget = widget, Set = Set }
+end
+
+local function Header(text)
+	local row = NewRow(ART.headerHeight)
+	local fs = row:CreateFontString(nil, "OVERLAY", ART.header)
+	fs:SetPoint("TOPLEFT", row, "TOPLEFT", 7, -16)
+	fs:SetJustifyH("LEFT")
+	fs:SetText(text)
+	ui.headers[#ui.headers + 1] = text
+end
+
+local function PanelButton(parent, w, h)
+	local b = Try("Button", parent, ART.button)
+	if not b then -- fallback: plain button with Blizzard's button font
+		b = CreateFrame("Button", nil, parent)
+		if b.SetNormalFontObject then b:SetNormalFontObject("GameFontNormal") end
+		if b.SetHighlightFontObject then b:SetHighlightFontObject("GameFontHighlight") end
+	end
+	b:SetSize(w, h)
+	return b
+end
+
+local function Button(name, text, onClick, tooltip)
+	local row = NewRow(ART.rowHeight, name, tooltip)
+	local b = PanelButton(row, 200, 22)
+	b:SetText(text)
+	b:SetScript("OnClick", function() onClick() end)
+	PlaceControl(b, row)
+	ui.buttons[name] = b
+end
+
+local function Checkbox(key, name, default, tooltip)
+	local row = NewRow(ART.rowHeight, name, tooltip)
+	local cb = Try("CheckButton", row, ART.checkbox[1]) or Try("CheckButton", row, ART.checkbox[2])
+	if not cb then -- fallback: Blizzard's classic checkbox textures
+		cb = CreateFrame("CheckButton", nil, row)
+		cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+		cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+		cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
+		cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+	end
+	cb:SetSize(30, 29)
+	cb:SetScript("OnClick", function(self)
+		local on = self:GetChecked() and true or false
+		PlayClick(on)
+		UserSet(key, on)
+	end)
+	PlaceControl(cb, row)
+	AddControl(key, "check", name, default, cb, function(v) cb:SetChecked(v and true or false) end)
+end
+
+local function Slider(key, name, default, tooltip, format)
+	local lim = TT.limits[key]
+	local row = NewRow(ART.rowHeight, name, tooltip)
+	local M = MinimalSliderWithSteppersMixin
+	local sw = Try("Frame", row, ART.slider)
+	local Set
+	if sw and sw.Init and sw.RegisterCallback and sw.SetValue and M and M.Event and M.Label then
+		sw:SetWidth(250)
+		-- formatters: label -> function(value) (MinimalSliderWithSteppersMixin:FormatValue)
+		local steps = math.floor((lim[2] - lim[1]) / lim[3] + 0.5)
+		sw:Init(Saved(key) or default, lim[1], lim[2], steps, { [M.Label.Right] = format })
+		sw:RegisterCallback(M.Event.OnValueChanged, function(_, v) UserSet(key, v) end, row)
+		Set = function(v) sw:SetValue(v) end
+		AddTip(sw.Slider, row)
+	else -- fallback: a plain slider bar, the value written to its right
+		if sw and sw.Hide then sw:Hide() end
+		sw = CreateFrame("Slider", nil, row)
+		sw:SetOrientation("HORIZONTAL")
+		sw:SetSize(212, 17)
+		sw:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+		sw:SetMinMaxValues(lim[1], lim[2])
+		sw:SetValueStep(lim[3])
+		if sw.SetObeyStepOnDrag then sw:SetObeyStepOnDrag(true) end
+		local track = sw:CreateTexture(nil, "BACKGROUND")
+		track:SetColorTexture(0, 0, 0, 0.6)
+		track:SetPoint("LEFT", sw, "LEFT", 0, 0)
+		track:SetPoint("RIGHT", sw, "RIGHT", 0, 0)
+		track:SetHeight(6)
+		local txt = sw:CreateFontString(nil, "OVERLAY", ART.label)
+		txt:SetPoint("LEFT", sw, "RIGHT", 10, 0)
+		sw:SetScript("OnValueChanged", function(_, v)
+			txt:SetText(format(v))
+			UserSet(key, v)
+		end)
+		Set = function(v)
+			sw:SetValue(v)
+			txt:SetText(format(v))
+		end
+	end
+	PlaceControl(sw, row)
+	AddControl(key, "slider", name, default, sw, Set)
+	ui.controls[key].min, ui.controls[key].max, ui.controls[key].step, ui.controls[key].format = lim[1], lim[2], lim[3], format
+end
+
+local function LabelOf(choices, value)
+	for _, l in ipairs(choices) do if l[1] == value then return l[2] end end
+	return tostring(value)
+end
+
+local function Dropdown(key, name, default, tooltip, choices)
+	local row = NewRow(ART.rowHeight, name, tooltip)
+	local dd = Try("DropdownButton", row, ART.dropdown)
+	local Set
+	if dd and dd.SetupMenu then
+		dd:SetWidth(200)
+		dd:SetupMenu(function(_, root)
+			for _, l in ipairs(choices) do
+				root:CreateRadio(l[2], function(v) return Saved(key) == v end, function(v) UserSet(key, v) end, l[1])
+			end
+		end)
+		-- the shown text comes from the selected radio: rebuild after a change
+		Set = function() if dd.GenerateMenu then dd:GenerateMenu() end end
+	else -- fallback: a button that steps to the next choice on each click
+		if dd and dd.Hide then dd:Hide() end
+		dd = PanelButton(row, 200, 22)
+		dd:SetScript("OnClick", function()
+			local cur, nextValue = Saved(key), choices[1][1]
+			for i, l in ipairs(choices) do
+				if l[1] == cur then nextValue = (choices[i + 1] or choices[1])[1] end
+			end
+			UserSet(key, nextValue)
+		end)
+		Set = function(v) dd:SetText(LabelOf(choices, v)) end
+	end
+	PlaceControl(dd, row)
+	AddControl(key, "dropdown", name, default, dd, Set)
+	ui.controls[key].choices = choices
+end
+
+-- the page frame: title, divider, Defaults button and a scrolling list
+local function NewPanel()
+	local panel = CreateFrame("Frame") -- the Settings window parents it to its canvas
+	panel:Hide()
+	ui.panel = panel
+
+	local title = panel:CreateFontString(nil, "ARTWORK", ART.title)
+	title:SetPoint("TOPLEFT", panel, "TOPLEFT", 7, -22)
+	title:SetText("Taxi Time")
+
+	local line = panel:CreateTexture(nil, "ARTWORK")
+	if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(ART.divider) and line.SetAtlas then
+		line:SetAtlas(ART.divider, true)
+		line:SetPoint("TOP", panel, "TOP", 0, -50)
+	else -- fallback: a thin light line
+		line:SetColorTexture(1, 1, 1, 0.15)
+		line:SetHeight(1)
+		line:SetPoint("TOPLEFT", panel, "TOPLEFT", 7, -50)
+		line:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -36, -50)
+	end
+
+	local def = PanelButton(panel, 96, 22)
+	def:SetText("Defaults")
+	def:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -36, -16)
+	def:SetScript("OnClick", function()
+		ResetToDefaults()
+		TT.Print("options set back to their defaults (colours kept).")
+	end)
+	def.ttName, def.ttText = "Defaults", "Set the options on this page back to their defaults. Colours and your recorded flights are kept."
+	AddTip(def, def)
+	ui.defaults = def
+
+	local scroll = Try("ScrollFrame", panel, ART.scroll)
+	if not scroll then -- fallback: scrolls with the mouse wheel, no bar
+		scroll = CreateFrame("ScrollFrame", nil, panel)
+		scroll:EnableMouseWheel(true)
+		scroll:SetScript("OnMouseWheel", function(self, delta)
+			local max = self:GetVerticalScrollRange() or 0
+			local v = math.max(0, math.min(max, (self:GetVerticalScroll() or 0) - delta * 40))
+			self:SetVerticalScroll(v)
+		end)
+	end
+	scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -56)
+	scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -24, 4)
+	local content = CreateFrame("Frame", nil, scroll)
+	content:SetSize(600, 1)
+	scroll:SetScrollChild(content)
+	scroll:HookScript("OnSizeChanged", function(_, w)
+		if type(w) == "number" and w > 0 then content:SetWidth(w) end
+	end)
+	ui.scroll, ui.content = scroll, content
+
+	-- Settings window hooks (called through securecallfunction) + our own show
+	panel.OnRefresh = RefreshAll
+	panel.OnDefault = ResetToDefaults
+	panel.OnCommit = function() end -- every change is saved at once
+	panel:SetScript("OnShow", RefreshAll)
+	return panel
+end
+
 local function Build()
-	local S = Settings
-	local cat, layout = S.RegisterVerticalLayoutCategory("Taxi Time")
-	if not layout and SettingsPanel and SettingsPanel.GetLayout then layout = SettingsPanel:GetLayout(cat) end
-	local VT = S.VarType or { Boolean = "boolean", Number = "number", String = "string" }
-
-	local function Header(text)
-		if layout and CreateSettingsListSectionHeaderInitializer then
-			layout:AddInitializer(CreateSettingsListSectionHeaderInitializer(text))
-		end
-	end
-
-	local function Button(name, text, onClick, tooltip)
-		if layout and CreateSettingsButtonInitializer then
-			layout:AddInitializer(CreateSettingsButtonInitializer(name, text, onClick, tooltip, true))
-		end
-	end
-
-	-- a Blizzard setting stored straight in our saved table
-	local function Register(key, varType, name, default)
-		local o = OPTIONS[key]
-		local tbl = o.tbl == "db" and TT.db or TT.db.bar
-		local s = S.RegisterAddOnSetting(cat, "TaxiTime_" .. key, key, tbl, varType, name, default)
-		settings[key] = s
-		if s and s.SetValueChangedCallback then
-			s:SetValueChangedCallback(function(_, value)
-				if not syncing then TT.SetOption(key, value) end
-			end)
-		end
-		return s
-	end
-
-	local function Checkbox(key, name, default, tooltip)
-		local s = Register(key, VT.Boolean, name, default)
-		if s and S.CreateCheckbox then S.CreateCheckbox(cat, s, tooltip) end
-	end
-
-	local function Slider(key, name, default, tooltip, format)
-		local lim = TT.limits[key]
-		local s = Register(key, VT.Number, name, default)
-		if not (s and S.CreateSlider and S.CreateSliderOptions) then return end
-		local opts = S.CreateSliderOptions(lim[1], lim[2], lim[3])
-		if opts.SetLabelFormatter and MinimalSliderWithSteppersMixin and MinimalSliderWithSteppersMixin.Label then
-			opts:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, format)
-		end
-		S.CreateSlider(cat, s, opts, tooltip)
-	end
-
+	local panel = NewPanel()
 	local d = TT.defaultsBar
 
 	Header("Bar")
@@ -215,14 +485,9 @@ local function Build()
 	end, "Back to the default blue and orange.")
 
 	Header("Flying creature")
-	local fs = Register("flyer", VT.String, "Creature", d.flyer)
-	if fs and S.CreateDropdown and S.CreateControlTextContainer then
-		S.CreateDropdown(cat, fs, function()
-			local c = S.CreateControlTextContainer()
-			for _, l in ipairs(FLYER_LABELS) do c:Add(l[1], l[2]) end
-			return c:GetData()
-		end, "Automatic matches the flight master. A creature picked with /tt flyer for one flight master still wins.")
-	end
+	Dropdown("flyer", "Creature", d.flyer,
+		"Automatic matches the flight master. A creature picked with /tt flyer for one flight master still wins.",
+		FLYER_LABELS)
 
 	Header("Landing")
 	Checkbox("landSound", "Play a sound when you land", true,
@@ -240,22 +505,28 @@ local function Build()
 		if TT.ShowMilestones then TT.ShowMilestones() end
 	end, "Your Taxi Time milestones: reached ones and how far you are with the rest. Also /tt milestones.")
 
-	S.RegisterAddOnCategory(cat)
+	ui.content:SetHeight(ui.y + 16)
+
+	local cat = Settings.RegisterCanvasLayoutCategory(panel, "Taxi Time")
+	Settings.RegisterAddOnCategory(cat)
 	return cat
 end
 
 -- called once from Core's ADDON_LOADED, after InitDB and Bar:Create
 function TT.InitOptions()
 	if category then return end
-	if not (Settings and Settings.RegisterVerticalLayoutCategory and Settings.RegisterAddOnSetting
-		and Settings.RegisterAddOnCategory) then
+	if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
 		return -- no panel on this client; the slash commands still work
 	end
+	refreshing = true -- building: the controls' first values are not user changes
 	local ok, result = pcall(Build)
-	if ok then
+	refreshing = false
+	if ok and result then
 		category = result
+		RefreshAll()
 	else
-		settings = {}
+		ui.controls, ui.buttons, ui.headers = {}, {}, {}
+		if ui.panel then ui.panel:Hide() end
 		TT.Print("the options panel could not be built (" .. tostring(result) .. "); /tt commands still work.")
 	end
 end

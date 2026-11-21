@@ -4,7 +4,7 @@ A World of Warcraft addon for **WoW Forever** that learns how long each flight p
 
 At a flight master it also shows each destination's time in the map tooltip, and it counts the gold and time you spend on flights.
 
-Version 0.2.1-beta.4. Please report any problems you find.
+Version 0.2.1-beta.5. Please report any problems you find.
 
 - [Install](#install)
 - [How it works](#how-it-works)
@@ -108,7 +108,9 @@ There are 17 small goals from your flying. They are Taxi Time's own, not game ac
 
 ## Options panel
 
-Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options > AddOns > Taxi Time.
+Open it with `/tt options` (or `/tt config`), or in the game menu: Esc > Options > AddOns > Taxi Time. It is its own page in the game's Settings window, and the list scrolls if the window is small.
+
+The **Defaults** button at the top right sets the options below back to their defaults. Your colours and recorded flights are kept (use Reset colours for the colours).
 
 | Setting | What it does |
 |---|---|
